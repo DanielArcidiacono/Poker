@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Screen Viewer — Login</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="login-body">
+    <main class="login-card">
+      <h1>Screen Viewer</h1>
+      <p class="sub">Enter the password to view this Mac.</p>
+      <form method="post" action="/login" autocomplete="current-password">
+        <label for="password">Password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          required
+          autofocus
+          enterkeyhint="go"
+        />
+        <button type="submit">Open viewer</button>
+      </form>
+      <p id="error" class="error" hidden>Incorrect password. Try again.</p>
+    </main>
+    <script>
+      if (new URLSearchParams(location.search).get("error")) {
+        document.getElementById("error").hidden = false;
+      }
+    </script>
+  </body>
+</html>
