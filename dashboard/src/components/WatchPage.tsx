@@ -11,6 +11,11 @@ type Status = {
   hostname: string | null;
 };
 
+function streamUrl(status: Status | null): string | null {
+  if (!status?.recording || !status.publicUrl || !status.watchToken) return null;
+  return `${status.publicUrl.replace(/\/$/, "")}/embed?token=${encodeURIComponent(status.watchToken)}`;
+}
+
 export function WatchPage() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
@@ -18,7 +23,10 @@ export function WatchPage() {
   const [status, setStatus] = useState<Status | null>(null);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/status", { credentials: "same-origin" });
+    const res = await fetch("/api/status", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
     if (res.status === 401) {
       setAuthed(false);
       setStatus(null);
@@ -34,6 +42,15 @@ export function WatchPage() {
     const id = setInterval(() => void refresh(), 2000);
     return () => clearInterval(id);
   }, [refresh]);
+
+  // Cloudflare quick tunnels often block being framed. Open the stream as a
+  // top-level page (same URL the Terminal prints) instead of an iframe.
+  useEffect(() => {
+    if (!authed) return;
+    const url = streamUrl(status);
+    if (!url) return;
+    window.location.replace(url);
+  }, [authed, status]);
 
   async function login(e: React.FormEvent) {
     e.preventDefault();
@@ -67,7 +84,10 @@ export function WatchPage() {
       <main className="shell">
         <form className="card" onSubmit={login}>
           <h1>Watch</h1>
-          <p className="muted">Enter the password to view the live stream.</p>
+          <p className="muted">
+            Enter the password to open the live stream. You will be redirected
+            to the public stream link automatically.
+          </p>
           <label htmlFor="password">Password</label>
           <input
             id="password"
@@ -84,50 +104,47 @@ export function WatchPage() {
     );
   }
 
-  const embedSrc =
-    status?.recording && status.publicUrl && status.watchToken
-      ? `${status.publicUrl.replace(/\/$/, "")}/embed?token=${encodeURIComponent(status.watchToken)}`
-      : null;
-
-  if (!embedSrc) {
-    let detail =
-      "Nothing is live yet. Open Go live, wait until it says Live, then refresh.";
-    if (!status?.online) {
-      detail =
-        "Mac agent is offline. On the sharing Mac, finish the Terminal install, then press Go live again.";
-    } else if (status.message) {
-      detail = status.message;
-    }
-
+  const url = streamUrl(status);
+  if (url) {
     return (
       <main className="shell">
         <div className="card">
-          <h1>Watch</h1>
-          <p className="muted">{detail}</p>
-          <p className="muted" style={{ marginTop: 8 }}>
-            Agent:{" "}
-            <span className={status?.online ? "ok" : "err"}>
-              {status?.online ? "online" : "offline"}
-            </span>
-            {status?.hostname ? ` · ${status.hostname}` : ""}
-            {status?.recording ? " · recording" : " · not recording"}
+          <h1>Opening stream…</h1>
+          <p className="muted">
+            Redirecting to the live link. If nothing happens,{" "}
+            <a href={url}>open it here</a>.
           </p>
-          <a className="button-link" href="/">
-            Go live
-          </a>
         </div>
       </main>
     );
   }
 
+  let detail =
+    "Nothing is live yet. On the sharing Mac, run the install/share command, then refresh.";
+  if (!status?.online) {
+    detail =
+      "Mac agent is offline. Finish the Terminal install on the sharing Mac, then refresh.";
+  } else if (status.message) {
+    detail = status.message;
+  }
+
   return (
-    <main className="watch-frame">
-      <iframe
-        title="Live stream"
-        src={embedSrc}
-        allow="fullscreen"
-        referrerPolicy="no-referrer"
-      />
+    <main className="shell">
+      <div className="card">
+        <h1>Watch</h1>
+        <p className="muted">{detail}</p>
+        <p className="muted" style={{ marginTop: 8 }}>
+          Agent:{" "}
+          <span className={status?.online ? "ok" : "err"}>
+            {status?.online ? "online" : "offline"}
+          </span>
+          {status?.hostname ? ` · ${status.hostname}` : ""}
+          {status?.recording ? " · recording" : " · not recording"}
+        </p>
+        <a className="button-link" href="/">
+          Go live
+        </a>
+      </div>
     </main>
   );
 }

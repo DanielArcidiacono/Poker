@@ -16,6 +16,10 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>

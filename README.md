@@ -104,6 +104,14 @@ This writes `~/Library/LaunchAgents/com.local.screenviewer.plist` with `KeepAliv
 
 `~/Library/Logs/screenviewer/`
 
+After a restart, the service starts automatically when that macOS user logs
+in. With `SHARE_ON_START=1`, it waits for the network, creates a new Cloudflare
+quick tunnel, and publishes the replacement URL to the dashboard. If
+`cloudflared` crashes later, it is restarted automatically.
+
+Screen capture cannot run at the FileVault/login screen. Sharing resumes after
+the user logs in and macOS restores that user's Screen Recording permission.
+
 Remove with:
 
 ```bash
@@ -127,6 +135,7 @@ For a stable remote URL while the agent runs, set `CLOUDFLARED_TOKEN` (or `CLOUD
 | `CLOUDFLARED_TOKEN` | | Named tunnel token |
 | `CLOUDFLARED_CONFIG` | | Path to cloudflared config |
 | `AUTO_TUNNEL` | `0` | If `1`, spawn a quick tunnel as a child |
+| `SHARE_ON_START` | `0` | If `1`, go live after login/reboot and keep the tunnel alive |
 
 ## Wake behavior
 

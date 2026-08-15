@@ -114,9 +114,15 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
       }, 8_000);
 
       try {
+        // A quick-tunnel process can remain alive after its hostname stops
+        // resolving. A start command means "replace the tunnel", not "reuse
+        // whatever child process exists".
+        options.tunnel.stop();
         const publicUrl = await options.tunnel.startQuick();
+        clearInterval(keepAlive);
         await goLiveWithUrl(publicUrl, "Recording — public link ready.");
       } catch (err) {
+        clearInterval(keepAlive);
         options.tunnel.stop();
         const lanUrl = getLanBaseUrl(options.port, base);
         if (lanUrl) {
@@ -183,26 +189,56 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
         console.log("[control-plane] SHARE_ON_START — going live automatically");
         await handleCommand({ type: "start_recording" });
       } else if (activeStreamUrl && watchToken) {
-        // Keep LAN/tunnel session marked live — do not clear just because
-        // cloudflared isn't the transport.
-        await report({
-          recording: true,
-          publicUrl: activeStreamUrl,
-          watchToken,
-          message: activeMessage,
-        });
+        const st = options.tunnel.getStatus();
+        if (
+          st.running &&
+          st.mode === "quick" &&
+          st.publicUrl &&
+          st.publicUrl !== activeStreamUrl
+        ) {
+          // cloudflared restarted after a reboot/network failure and received
+          // a different quick-tunnel hostname. Publish it immediately.
+          await goLiveWithUrl(
+            st.publicUrl,
+            "Recording — tunnel restored after restart.",
+          );
+        } else if (!st.running) {
+          activeStreamUrl = null;
+          activeMessage = null;
+          setWatchToken(null);
+          await report({
+            recording: false,
+            publicUrl: null,
+            watchToken: null,
+            message: "Reconnecting Cloudflare tunnel…",
+          });
+        } else {
+          await report({
+            recording: true,
+            publicUrl: activeStreamUrl,
+            watchToken,
+            message: activeMessage,
+          });
+        }
       } else {
         const st = options.tunnel.getStatus();
-        const recording = st.running && st.mode === "quick";
-        if (!recording && watchToken) setWatchToken(null);
-        if (recording && !watchToken) {
-          setWatchToken(randomBytes(24).toString("hex"));
+        if (st.running && st.mode === "quick" && st.publicUrl) {
+          if (!watchToken) setWatchToken(randomBytes(24).toString("hex"));
+          activeStreamUrl = st.publicUrl;
+          activeMessage = activeMessage || "Recording — public link ready.";
+          await report({
+            recording: true,
+            publicUrl: st.publicUrl,
+            watchToken,
+            message: activeMessage,
+          });
+        } else {
+          // Idle heartbeat only — do not send publicUrl:null (wipes dashboard).
+          await report({
+            recording: false,
+            message: null,
+          });
         }
-        await report({
-          recording,
-          publicUrl: st.publicUrl,
-          watchToken: recording ? watchToken : null,
-        });
       }
     } catch (err) {
       console.error("[control-plane] poll error:", err);

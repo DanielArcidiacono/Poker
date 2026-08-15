@@ -11,6 +11,7 @@ export type AgentReport = {
   lastSeen: number | null;
   recording: boolean;
   publicUrl: string | null;
+  publicUrlUpdatedAt: number | null;
   watchToken: string | null;
   message: string | null;
   hostname: string | null;
@@ -40,6 +41,7 @@ type FileState = {
   hostname: string | null;
   recording: boolean;
   publicUrl: string | null;
+  publicUrlUpdatedAt: number | null;
   watchToken: string | null;
   message: string | null;
   queue: AgentCommand[];
@@ -50,6 +52,7 @@ const emptyState = (): FileState => ({
   hostname: null,
   recording: false,
   publicUrl: null,
+  publicUrlUpdatedAt: null,
   watchToken: null,
   message: null,
   queue: [],
@@ -91,6 +94,7 @@ function reportFrom(state: FileState): AgentReport {
     lastSeen: state.lastSeen,
     recording: state.recording,
     publicUrl: state.publicUrl,
+    publicUrlUpdatedAt: state.publicUrlUpdatedAt,
     watchToken: state.watchToken,
     message: state.message,
     hostname: state.hostname,
@@ -113,8 +117,10 @@ function createFileStore(): Store {
       return reportFrom(readState());
     },
     async enqueue(cmd) {
-      const full: AgentCommand = { ...cmd, id: crypto.randomUUID() };
       const s = readState();
+      const existing = s.queue.find((queued) => queued.type === cmd.type);
+      if (existing) return existing;
+      const full: AgentCommand = { ...cmd, id: crypto.randomUUID() };
       s.queue.push(full);
       writeState(s);
       return full;
@@ -127,8 +133,44 @@ function createFileStore(): Store {
     },
     async setStatus(status) {
       const s = readState();
+      const currentlyLive = Boolean(
+        s.recording && s.publicUrl && s.watchToken,
+      );
+      const clearingLive =
+        status.recording === false &&
+        (status.publicUrl === null || status.publicUrl === undefined);
+      const explicitStop =
+        status.message === "Recording stopped." ||
+        status.message === "Starting Cloudflare tunnel…" ||
+        status.message === "Starting stream…" ||
+        status.message === "Reconnecting Cloudflare tunnel…" ||
+        (typeof status.message === "string" &&
+          (status.message.startsWith("Failed") ||
+            status.message.includes("Failed to start")));
+
+      // Ignore idle/flap reports that would wipe an active session (common when
+      // two agent processes share one token, or tunnel status briefly flaps).
+      if (currentlyLive && clearingLive && !explicitStop) {
+        s.lastSeen = Date.now();
+        if (status.hostname !== undefined && status.hostname) {
+          s.hostname = status.hostname;
+        }
+        writeState(s);
+        return;
+      }
+
       s.recording = status.recording;
-      if (status.publicUrl !== undefined) s.publicUrl = status.publicUrl;
+      if (status.publicUrl !== undefined) {
+        if (
+          status.publicUrl &&
+          (status.publicUrl !== s.publicUrl || !s.publicUrlUpdatedAt)
+        ) {
+          s.publicUrlUpdatedAt = Date.now();
+        } else if (status.publicUrl === null) {
+          s.publicUrlUpdatedAt = null;
+        }
+        s.publicUrl = status.publicUrl;
+      }
       if (status.watchToken !== undefined) s.watchToken = status.watchToken;
       if (status.message !== undefined) s.message = status.message;
       if (status.hostname !== undefined) s.hostname = status.hostname;
@@ -157,6 +199,7 @@ function createRedisStore(redis: Redis): Store {
         redis.get<{
           recording: boolean;
           publicUrl: string | null;
+          publicUrlUpdatedAt: number | null;
           watchToken: string | null;
           message: string | null;
           hostname: string | null;
@@ -171,6 +214,7 @@ function createRedisStore(redis: Redis): Store {
         lastSeen,
         recording: status?.recording ?? false,
         publicUrl: status?.publicUrl ?? null,
+        publicUrlUpdatedAt: status?.publicUrlUpdatedAt ?? null,
         watchToken: status?.watchToken ?? null,
         message: status?.message ?? null,
         hostname: status?.hostname ?? hb?.hostname ?? null,
@@ -178,6 +222,17 @@ function createRedisStore(redis: Redis): Store {
     },
     async enqueue(cmd) {
       const full: AgentCommand = { ...cmd, id: crypto.randomUUID() };
+      // Redis deployments may have several Watch refreshes at once. Keep the
+      // queue bounded; the agent only needs one start/stop request.
+      const queued = await redis.lrange<string>(queueKey, 0, -1);
+      const existing = queued
+        .map((raw) =>
+          typeof raw === "string"
+            ? (JSON.parse(raw) as AgentCommand)
+            : (raw as AgentCommand),
+        )
+        .find((item) => item.type === cmd.type);
+      if (existing) return existing;
       await redis.rpush(queueKey, JSON.stringify(full));
       return full;
     },
@@ -193,20 +248,56 @@ function createRedisStore(redis: Redis): Store {
         (await redis.get<{
           recording: boolean;
           publicUrl: string | null;
+          publicUrlUpdatedAt: number | null;
           watchToken: string | null;
           message: string | null;
           hostname: string | null;
         }>(statusKey)) ?? {
           recording: false,
           publicUrl: null,
+          publicUrlUpdatedAt: null,
           watchToken: null,
           message: null,
           hostname: null,
         };
+
+      const currentlyLive = Boolean(
+        prev.recording && prev.publicUrl && prev.watchToken,
+      );
+      const clearingLive =
+        status.recording === false &&
+        (status.publicUrl === null || status.publicUrl === undefined);
+      const explicitStop =
+        status.message === "Recording stopped." ||
+        status.message === "Starting Cloudflare tunnel…" ||
+        status.message === "Starting stream…" ||
+        status.message === "Reconnecting Cloudflare tunnel…" ||
+        (typeof status.message === "string" &&
+          (status.message.startsWith("Failed") ||
+            status.message.includes("Failed to start")));
+
+      if (currentlyLive && clearingLive && !explicitStop) {
+        await redis.set(
+          hbKey,
+          { at: Date.now(), hostname: status.hostname ?? prev.hostname },
+          { px: HEARTBEAT_TTL_MS },
+        );
+        return;
+      }
+
       const next = {
         recording: status.recording,
         publicUrl:
           status.publicUrl !== undefined ? status.publicUrl : prev.publicUrl,
+        publicUrlUpdatedAt:
+          status.publicUrl !== undefined
+            ? status.publicUrl === null
+              ? null
+              : status.publicUrl !== prev.publicUrl ||
+                  !prev.publicUrlUpdatedAt
+                ? Date.now()
+                : prev.publicUrlUpdatedAt
+            : prev.publicUrlUpdatedAt,
         watchToken:
           status.watchToken !== undefined ? status.watchToken : prev.watchToken,
         message: status.message !== undefined ? status.message : prev.message,

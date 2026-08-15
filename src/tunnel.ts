@@ -59,6 +59,14 @@ function shouldAutoStartQuick(): boolean {
   return process.env.AUTO_TUNNEL === "1" || process.env.AUTO_TUNNEL === "true";
 }
 
+function shouldKeepQuickAlive(): boolean {
+  return (
+    shouldAutoStartQuick() ||
+    process.env.SHARE_ON_START === "1" ||
+    process.env.SHARE_ON_START === "true"
+  );
+}
+
 export function createTunnelManager(port: string | number): TunnelManager {
   const portStr = String(port);
   let child: ChildProcess | null = null;
@@ -103,6 +111,9 @@ export function createTunnelManager(port: string | number): TunnelManager {
     proc.stdout.on("data", (chunk: Buffer) => ingestLog(chunk.toString()));
     proc.stderr.on("data", (chunk: Buffer) => ingestLog(chunk.toString()));
     proc.on("error", (err) => {
+      // A replacement may already be running; an old child's late event must
+      // never clear the new child.
+      if (child !== proc) return;
       console.error("[tunnel] failed to start cloudflared:", err.message);
       rejectWaiters(
         new Error(
@@ -114,6 +125,7 @@ export function createTunnelManager(port: string | number): TunnelManager {
       publicUrl = null;
     });
     proc.on("exit", (code, signal) => {
+      if (child !== proc) return;
       console.log(
         `[tunnel] cloudflared exited code=${code} signal=${signal ?? ""}`,
       );
@@ -125,6 +137,18 @@ export function createTunnelManager(port: string | number): TunnelManager {
       if (!intentionalStop && !restarting && wasMode === "named") {
         setTimeout(() => {
           if (!intentionalStop) startNamed();
+        }, 2000);
+      } else if (
+        !intentionalStop &&
+        !restarting &&
+        wasMode === "quick" &&
+        shouldKeepQuickAlive()
+      ) {
+        setTimeout(() => {
+          if (intentionalStop || child) return;
+          void waitForNetwork(60_000).then((online) => {
+            if (online && !intentionalStop && !child) startQuickProcess();
+          });
         }, 2000);
       }
     });
