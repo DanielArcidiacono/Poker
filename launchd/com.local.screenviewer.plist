@@ -42,6 +42,8 @@
       <string>__CLOUDFLARED_CONFIG__</string>
       <key>AUTO_TUNNEL</key>
       <string>__AUTO_TUNNEL__</string>
+      <key>SHARE_ON_START</key>
+      <string>__SHARE_ON_START__</string>
       <key>CONTROL_PLANE_URL</key>
       <string>__CONTROL_PLANE_URL__</string>
       <key>AGENT_TOKEN</key>

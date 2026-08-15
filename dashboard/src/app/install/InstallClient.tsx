@@ -11,6 +11,7 @@ export function InstallClient({
 }) {
   const [hint, setHint] = useState("");
   const textRef = useRef<HTMLTextAreaElement>(null);
+  const watchUrl = `${origin.replace(/\/$/, "")}/watch`;
 
   function selectCommand() {
     const el = textRef.current;
@@ -58,11 +59,13 @@ export function InstallClient({
       <div className="card prompt" style={{ width: "min(100%, 520px)" }}>
         <h1>Share this Mac</h1>
         <p className="muted">
-          Same method as computer 1: this Mac creates a public link in Terminal.
-          You open that link on the other computer — ignore Go live / offline for
-          now.
+          Installs a background agent on this Mac, publishes the stream to the
+          dashboard, then you can quit Terminal. On computer 1 always open:
         </p>
-        <p className="muted">
+        <p className="ok-line" style={{ marginTop: 8 }}>
+          <a href={watchUrl}>{watchUrl}</a>
+        </p>
+        <p className="muted" style={{ marginTop: 12 }}>
           Needs <strong>Node.js</strong> (
           <a href="https://nodejs.org" target="_blank" rel="noreferrer">
             nodejs.org
@@ -106,15 +109,16 @@ export function InstallClient({
             share.
           </li>
           <li>
-            Wait for a block that says{" "}
-            <strong>OPEN THIS ON THE OTHER COMPUTER</strong> with a{" "}
-            <code>trycloudflare.com</code> link.
+            Wait until it prints the stable watch URL (same as above).
           </li>
           <li>
-            On computer 1, open that link and enter password{" "}
-            <code>change-me</code>.
+            On computer 1 open that <strong>/watch</strong> page (password{" "}
+            <code>change-me</code>).
           </li>
-          <li>Leave Terminal open on computer 2 while sharing.</li>
+          <li>
+            You can quit Terminal on computer 2 — sharing keeps running until you
+            uninstall the agent.
+          </li>
         </ol>
       </div>
     </main>

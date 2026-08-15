@@ -150,6 +150,7 @@ PORT=8787
 FPS=8
 JPEG_QUALITY=60
 SCALE=0.5
+SHARE_ON_START=1
 ENVEOF
 
 echo "Installing npm dependencies…"
@@ -157,22 +158,58 @@ echo "Installing npm dependencies…"
 npm install --foreground-scripts
 npm rebuild sharp || true
 
-# Background LaunchAgent is optional; simple share (below) is what actually works
-# reliably — same model as streaming from computer 1.
-echo "Installing background agent (optional)…"
-DEFER_START=0 npm run install-agent || true
+echo "Installing background agent (keeps running after Terminal quits)…"
+SHARE_ON_START=1 DEFER_START=0 npm run install-agent
+
+echo ""
+echo "Waiting for local agent…"
+LOCAL_OK=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if curl -fsS "http://127.0.0.1:8787/api/health" >/dev/null 2>&1; then
+    LOCAL_OK=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$LOCAL_OK" != "1" ]]; then
+  echo "ERROR: Agent did not start. Logs:"
+  tail -n 40 "$HOME/Library/Logs/screenviewer/screenviewer.err.log" 2>/dev/null || true
+  exit 1
+fi
+
+echo "Publishing stream URL to the dashboard…"
+LIVE=0
+PUBLIC=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  BODY="$(curl -fsS "$CONTROL_PLANE/api/go-live" 2>/dev/null || true)"
+  if echo "$BODY" | grep -q '"recording":true'; then
+    LIVE=1
+    PUBLIC="$(echo "$BODY" | grep -o '"publicUrl":"[^"]*"' | head -1 | cut -d'"' -f4)"
+    break
+  fi
+  sleep 2
+done
 
 echo ""
 echo "========================================"
-echo "SIMPLE SHARE (same as computer 1)"
-echo "Leave this Terminal open while sharing."
+echo "ON COMPUTER 1, OPEN THIS (stable URL):"
+echo ""
+echo "  ${controlPlane}/watch"
+echo ""
+echo "Password: ${viewerPassword}"
 echo "========================================"
+if [[ "$LIVE" == "1" && -n "$PUBLIC" ]]; then
+  echo ""
+  echo "Tunnel (changes each session, you usually ignore this):"
+  echo "  $PUBLIC"
+elif [[ "$LIVE" != "1" ]]; then
+  echo ""
+  echo "WARNING: Stream not live yet. On computer 1 press Go live, or run:"
+  echo "  cd \"$REPO_PATH\" && npm run share"
+fi
 echo ""
-echo "Starting public link…"
-echo ""
-
-# Foreground share: prints a trycloudflare.com URL to open on the other Mac.
-exec npm run share
+echo "You can quit Terminal now — sharing keeps running in the background."
+echo "To stop: cd \"$REPO_PATH\" && npm run uninstall-agent"
 `;
 }
 

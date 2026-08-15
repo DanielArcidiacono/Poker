@@ -246,15 +246,13 @@ export function GoLivePage() {
     <main className="shell">
       <div className="go-live-wrap">
         <p className="muted" style={{ marginBottom: 16, maxWidth: 420 }}>
-          Sharing the <em>other</em> Mac is different from watching this one:
-          that Mac must print a public link in Terminal (same as how this Mac
-          shared before). Open{" "}
+          To share the other Mac: open{" "}
           <a href={installHref} target="_blank" rel="noopener noreferrer">
             Share this Mac
           </a>{" "}
-          on the sharing computer, run the command, then open the{" "}
-          <code>trycloudflare.com</code> URL it prints — you can skip the Agent
-          online indicator.
+          there, run the Terminal command once, then on this computer open{" "}
+          <a href="/watch">/watch</a> (stable URL). You can quit Terminal on the
+          other Mac afterward.
         </p>
         <p className="muted" style={{ marginBottom: 16 }}>
           Agent:{" "}

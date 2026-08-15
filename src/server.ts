@@ -300,6 +300,9 @@ const capture = createCapture({
 
 const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
 const agentToken = process.env.AGENT_TOKEN?.trim();
+const shareOnStart =
+  process.env.SHARE_ON_START === "1" ||
+  process.env.SHARE_ON_START === "true";
 const controlPlane =
   controlPlaneUrl && agentToken
     ? startControlPlane({
@@ -307,6 +310,7 @@ const controlPlane =
         token: agentToken,
         tunnel,
         port,
+        shareOnStart,
         onWatchToken: (token) => {
           activeWatchToken = token;
         },

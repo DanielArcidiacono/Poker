@@ -24,6 +24,8 @@ type Options = {
   /** Local agent HTTP port — used for LAN stream fallback. */
   port: number | string;
   pollMs?: number;
+  /** Start tunnel + push URL to dashboard as soon as the agent boots. */
+  shareOnStart?: boolean;
   onWatchToken?: (token: string | null) => void;
 };
 
@@ -52,6 +54,7 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
   /** When set, we are live (tunnel or LAN) until stop_recording. */
   let activeStreamUrl: string | null = null;
   let activeMessage: string | null = null;
+  let wantShareOnStart = Boolean(options.shareOnStart);
 
   const base = options.baseUrl.replace(/\/$/, "");
 
@@ -175,6 +178,10 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
       if (data.command) {
         console.log("[control-plane] command:", data.command.type);
         await handleCommand(data.command);
+      } else if (wantShareOnStart && !activeStreamUrl) {
+        wantShareOnStart = false;
+        console.log("[control-plane] SHARE_ON_START — going live automatically");
+        await handleCommand({ type: "start_recording" });
       } else if (activeStreamUrl && watchToken) {
         // Keep LAN/tunnel session marked live — do not clear just because
         // cloudflared isn't the transport.
