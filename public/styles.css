@@ -1,0 +1,241 @@
+:root {
+  --bg: #0e1114;
+  --panel: #171b20;
+  --text: #e8ecef;
+  --muted: #9aa3ab;
+  --accent: #3d8bfd;
+  --danger: #e35d6a;
+  --border: #2a3138;
+  font-family: "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.login-body {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(ellipse at 20% 0%, #1a2430 0%, transparent 55%),
+    radial-gradient(ellipse at 80% 100%, #152018 0%, transparent 50%),
+    var(--bg);
+}
+
+.login-card {
+  width: min(100%, 380px);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 24px;
+}
+
+.login-card h1 {
+  margin: 0 0 8px;
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
+}
+
+.sub {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+input[type="password"] {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #0c0f12;
+  color: var(--text);
+  font-size: 1rem;
+  margin-bottom: 14px;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 12px 16px;
+  width: 100%;
+  cursor: pointer;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+.error {
+  margin: 14px 0 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.viewer-body {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #000;
+}
+
+.viewer-body.stream-only .viewer-stage {
+  flex: 1;
+}
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  background: rgba(14, 17, 20, 0.92);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.status {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.status.live {
+  color: #6dcaa5;
+}
+
+.status.error {
+  color: var(--danger);
+}
+
+.logout,
+.bar-btn {
+  width: auto;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.viewer-actions form {
+  margin: 0;
+}
+
+#agent-btn:not([hidden]) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.primary-btn:not([hidden]) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.primary-btn.live-btn {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+  border-color: transparent;
+}
+
+.share-panel {
+  padding: 10px 14px 12px;
+  background: #12161a;
+  border-bottom: 1px solid var(--border);
+}
+
+.share-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.share-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.share-link {
+  flex: 1 1 220px;
+  min-width: 0;
+  color: #8ec5ff;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-hint {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.agent-msg {
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: #12161a;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-msg.ok {
+  color: #6dcaa5;
+}
+
+.agent-msg.err {
+  color: var(--danger);
+}
+
+.viewer-stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #000;
+}
+
+#frame {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}

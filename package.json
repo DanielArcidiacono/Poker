@@ -1,0 +1,33 @@
+{
+  "name": "mac-screen-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "View-only Mac screen stream for iPad via browser + Cloudflare Tunnel",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "share": "tsx src/share-cli.ts",
+    "tunnel": "tsx src/tunnel-cli.ts",
+    "install-agent": "bash scripts/install-agent.sh",
+    "uninstall-agent": "bash scripts/uninstall-agent.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "screenshot-desktop": "^1.15.1",
+    "sharp": "^0.33.5",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.13.10",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
