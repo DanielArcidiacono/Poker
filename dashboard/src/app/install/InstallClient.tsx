@@ -116,8 +116,10 @@ export function InstallClient({
             press Go live.
           </li>
           <li>
-            You can quit Terminal on the Mac. Use <strong>Stop</strong> on the
-            Prostar dashboard whenever you are done.
+            After success, the setup shell closes automatically. Use <strong>
+              Stop
+            </strong>{" "}
+            on the Prostar dashboard whenever you are done sharing.
           </li>
         </ol>
         <p className="muted" style={{ marginTop: 14 }}>

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import type sharpModule from "sharp";
 
@@ -21,6 +22,12 @@ export type CaptureController = {
 };
 
 type SharpModule = typeof sharpModule;
+
+type CaptureDependencies = {
+  grabRawFrame?: (options: CaptureOptions) => Promise<Buffer>;
+  grabFrame?: (options: CaptureOptions) => Promise<Buffer>;
+  now?: () => number;
+};
 
 const execFileAsync = promisify(execFile);
 const capturePath = join(tmpdir(), `prostar-${process.pid}.jpg`);
@@ -96,13 +103,20 @@ async function grabFrame(options: CaptureOptions): Promise<Buffer> {
     .toBuffer();
 }
 
-export function createCapture(options: CaptureOptions): CaptureController {
+export function createCapture(
+  options: CaptureOptions,
+  dependencies: CaptureDependencies = {},
+): CaptureController {
   const intervalMs = Math.max(50, Math.round(1000 / options.fps));
+  const captureRaw = dependencies.grabRawFrame ?? grabRawFrame;
+  const captureFrame = dependencies.grabFrame ?? grabFrame;
+  const now = dependencies.now ?? (() => performance.now());
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
   let busy = false;
   let consecutiveErrors = 0;
+  let lastSuccessfulCaptureAt = 0;
 
   async function tick(): Promise<void> {
     if (!running) return;
@@ -113,7 +127,8 @@ export function createCapture(options: CaptureOptions): CaptureController {
     busy = true;
 
     try {
-      const jpeg = await grabFrame(options);
+      const jpeg = await captureFrame(options);
+      lastSuccessfulCaptureAt = now();
       consecutiveErrors = 0;
       if (running) options.onFrame(jpeg);
     } catch (err) {
@@ -145,12 +160,18 @@ export function createCapture(options: CaptureOptions): CaptureController {
 
   return {
     async preflight() {
-      if (running || busy) {
+      if (busy) {
+        // A live viewer may already be using the single-frame capture slot.
+        // A frame captured moments ago is stronger evidence than starting a
+        // second capture and prevents setup from polling on a false 503.
+        const age = now() - lastSuccessfulCaptureAt;
+        if (age >= 0 && age < 5_000) return;
         throw new Error("Screen capture is already in use");
       }
       busy = true;
       try {
-        await grabRawFrame(options);
+        await captureRaw(options);
+        lastSuccessfulCaptureAt = now();
       } finally {
         busy = false;
       }

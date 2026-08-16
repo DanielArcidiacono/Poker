@@ -36,7 +36,9 @@ Prostar installed successfully.
 All setup detail goes to `~/Library/Logs/Prostar/install.log`. A failure prints
 only a concise error pointing to that log and never prints success. macOS may
 open Screen Recording settings during the first install; approve the displayed
-helper and leave the command running until the success line appears.
+helper and leave the command running until the success line appears. A
+successful setup then closes that Terminal shell automatically; a failed setup
+keeps it open so the error remains visible.
 
 The installer creates a stable release link at
 `~/Library/Application Support/Prostar/current` and installs the

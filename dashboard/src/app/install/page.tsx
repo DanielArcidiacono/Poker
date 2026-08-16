@@ -1,6 +1,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { hasDashboardSession } from "@/lib/auth";
+import { buildInstallCommand } from "@/lib/install-command";
 import { createInstallToken } from "@/lib/install-token";
 import { InstallClient } from "./InstallClient";
 
@@ -13,7 +14,7 @@ export default async function InstallPage() {
   const origin = new URL(`${proto}://${host}`).origin;
   const token = createInstallToken();
   const installerUrl = `${origin}/api/install-agent/raw?token=${encodeURIComponent(token)}`;
-  const cmd = `( installer="$(mktemp -t prostar-install.XXXXXX)" && trap 'rm -f "$installer"' EXIT && /usr/bin/curl -fsSL '${installerUrl}' -o "$installer" && /bin/bash "$installer" )`;
+  const cmd = buildInstallCommand(installerUrl);
 
   return <InstallClient cmd={cmd} origin={origin} />;
 }
