@@ -1,38 +1,103 @@
-# Screen Viewer Dashboard (Vercel / LAN)
+# Prostar dashboard
 
-Two pages:
+The dashboard is Prostar's authenticated control plane:
 
-| Route | Auth | Purpose |
-|-------|------|---------|
-| `/` | None | **Go live** — starts stream, or downloads a one-click Mac installer if no agent is paired |
-| `/watch` | Password | Stream only |
+- `/` lists every currently active Prostar client and its viewer count.
+- `/install` creates an expiring, per-client production setup command.
+- `/watch/[clientId]` validates that client's current tunnel and opens its
+  authenticated stream.
 
-## Go live behavior
-
-1. If an agent is already online → start recording  
-2. If an agent is running on this Mac (`127.0.0.1:8787`) → install/start background service, then go live  
-3. Otherwise → download **Install Screen Viewer.command** (open it once; Right-click → Open if macOS blocks it). The page waits until the agent connects, then finishes Go live automatically  
-
-The installer clones the repo if needed, writes `.env` pairing values, runs `npm install`, and `npm run install-agent`.
+Each Mac has independent **Go live**, **Watch**, and **Stop** controls. **Stop**
+revokes the watch link and closes that client's tunnel; it does not uninstall
+or disable the background agent.
 
 ## Local development
 
 ```bash
-cd dashboard
 cp .env.example .env.local
-# set DASHBOARD_PASSWORD and AGENT_TOKEN
-npm install
+npm ci
 npm run dev
 ```
 
-LAN access from another computer:
+Open <http://127.0.0.1:3000>. Development uses process memory when Redis is not
+configured, so enrollments and control state disappear when the process
+restarts.
+
+## Production configuration
+
+Deploy with `dashboard` as the project root and configure:
+
+- `DASHBOARD_PASSWORD`: at least 12 characters; protects management,
+  installer generation, and Watch.
+- `PROSTAR_ENROLLMENT_SECRET`: 32–256 URL-safe characters; signs enrollment
+  claims and derives a separate scoped credential for each client.
+- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`: required together in
+  production so enrollment, desired state, and session data survive process or
+  serverless restarts.
+- `NEXT_PUBLIC_APP_URL`: optional canonical dashboard origin.
+- `PROSTAR_BOOTSTRAP_VIEWER_PASSWORD`: optional 12–128 character URL-safe
+  viewer password; otherwise each install receives a random password.
+
+The root enrollment secret is never copied to a client. Do not expose these
+values through `NEXT_PUBLIC_*` variables.
+
+## Build and publish
 
 ```bash
-npm run dev
-# open http://YOUR_LAN_IP:3000 on the other device
+npm ci
+npm run check
+npm run build
 ```
 
-## Deploy to Vercel
+The build creates these static files before Next.js compiles:
 
-1. Root Directory: `dashboard`
-2. Env: `DASHBOARD_PASSWORD`, `AGENT_TOKEN`, Upstash Redis, optional `NEXT_PUBLIC_GIT_REPO`
+- `/prostar-agent.tgz`
+- `/prostar-agent.tgz.sha256`
+
+The generated Mac installer downloads both from the deployed dashboard and
+verifies SHA-256 before extracting the archive. The setup command first
+downloads its complete shell script to a temporary file and only then executes
+it; the file is removed when the command exits.
+
+For Vercel, use the included `vercel.json`, set the project root to `dashboard`,
+add the production variables above, and deploy normally.
+
+## Production setup flow
+
+1. Sign in to the deployed dashboard.
+2. Choose **Set up Mac**.
+3. Copy the generated command to Terminal on the target Mac.
+4. Approve macOS Screen Recording access if requested.
+5. Wait for the sole success line: `Prostar installed successfully.`
+6. Return to the dashboard; the Mac appears under **Sessions**.
+
+Detailed setup output is stored on the Mac at
+`~/Library/Logs/Prostar/install.log`. On failure, Terminal prints a concise
+message pointing there.
+
+The setup command expires after ten minutes and identifies one client. Anyone
+given an unexpired command can run it, so treat it as a short-lived secret.
+There is intentionally no permanent anonymous backend-enrollment command.
+
+## Session persistence
+
+Production Redis stores enrolled client credentials and control state. The
+dashboard list itself contains active sessions only: clients disappear after
+their heartbeat expires and reappear automatically when they reconnect. The Mac
+LaunchAgent, not the dashboard page, keeps each installed agent running through
+Terminal/browser closure and starts it again after that user logs in following
+a restart.
+
+## Verification
+
+From the repository root:
+
+```bash
+npm ci
+npm --prefix dashboard ci
+npm test
+npm run check
+npm run build
+npm --prefix dashboard run check
+npm --prefix dashboard run build
+```

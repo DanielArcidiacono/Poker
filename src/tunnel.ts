@@ -3,7 +3,7 @@ import { networkInterfaces } from "node:os";
 
 const QUICK_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 
-export type TunnelMode = "idle" | "quick" | "named";
+export type TunnelMode = "idle" | "quick";
 
 export type TunnelStatus = {
   running: boolean;
@@ -15,9 +15,7 @@ export type TunnelManager = {
   startAuto: () => void;
   startQuick: () => Promise<string>;
   stop: () => void;
-  restart: () => Promise<void>;
   getStatus: () => TunnelStatus;
-  waitForNetwork: (timeoutMs?: number) => Promise<boolean>;
 };
 
 function hasUsableNetwork(): boolean {
@@ -32,23 +30,13 @@ function hasUsableNetwork(): boolean {
   return false;
 }
 
-export async function waitForNetwork(timeoutMs = 15000): Promise<boolean> {
+async function waitForNetwork(timeoutMs = 15000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (hasUsableNetwork()) return true;
     await new Promise((r) => setTimeout(r, 500));
   }
   return hasUsableNetwork();
-}
-
-function namedTunnelArgs(): string[] | null {
-  const token = process.env.CLOUDFLARED_TOKEN?.trim();
-  if (token) return ["tunnel", "--no-autoupdate", "run", "--token", token];
-
-  const config = process.env.CLOUDFLARED_CONFIG?.trim();
-  if (config) return ["tunnel", "--no-autoupdate", "--config", config, "run"];
-
-  return null;
 }
 
 function quickTunnelArgs(port: string): string[] {
@@ -60,20 +48,16 @@ function shouldAutoStartQuick(): boolean {
 }
 
 function shouldKeepQuickAlive(): boolean {
-  return (
-    shouldAutoStartQuick() ||
-    process.env.SHARE_ON_START === "1" ||
-    process.env.SHARE_ON_START === "true"
-  );
+  return shouldAutoStartQuick();
 }
 
 export function createTunnelManager(port: string | number): TunnelManager {
   const portStr = String(port);
   let child: ChildProcess | null = null;
   let intentionalStop = false;
-  let restarting = false;
   let mode: TunnelMode = "idle";
   let publicUrl: string | null = null;
+  let logTail = "";
   let urlWaiters: Array<{
     resolve: (url: string) => void;
     reject: (err: Error) => void;
@@ -91,18 +75,24 @@ export function createTunnelManager(port: string | number): TunnelManager {
   }
 
   function ingestLog(text: string): void {
-    process.stderr.write(`[cloudflared] ${text}`);
+    const combined = `${logTail}${text}`;
+    logTail = combined.slice(-2_048);
+    if (process.env.CLOUDFLARED_VERBOSE === "1") {
+      process.stderr.write(`[cloudflared] ${text}`);
+    } else if (/\b(error|failed|fatal)\b/i.test(text)) {
+      console.error(`[cloudflared] ${text.trim().slice(0, 1_000)}`);
+    }
     if (mode !== "quick") return;
-    const match = text.match(QUICK_URL_RE);
+    const match = combined.match(QUICK_URL_RE);
     if (match?.[0]) resolveWaiters(match[0]);
   }
 
-  function spawnWithArgs(args: string[], nextMode: TunnelMode): void {
+  function spawnQuickProcess(): void {
     intentionalStop = false;
-    mode = nextMode;
-    if (nextMode !== "quick") publicUrl = null;
-    console.log("[tunnel] starting cloudflared:", args.join(" "));
-    const proc = spawn("cloudflared", args, {
+    mode = "quick";
+    logTail = "";
+    console.log("[tunnel] starting cloudflared (quick)");
+    const proc = spawn("cloudflared", quickTunnelArgs(portStr), {
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
     });
@@ -134,13 +124,8 @@ export function createTunnelManager(port: string | number): TunnelManager {
       mode = "idle";
       publicUrl = null;
       rejectWaiters(new Error("cloudflared exited before sharing a public URL"));
-      if (!intentionalStop && !restarting && wasMode === "named") {
-        setTimeout(() => {
-          if (!intentionalStop) startNamed();
-        }, 2000);
-      } else if (
+      if (
         !intentionalStop &&
-        !restarting &&
         wasMode === "quick" &&
         shouldKeepQuickAlive()
       ) {
@@ -165,37 +150,38 @@ export function createTunnelManager(port: string | number): TunnelManager {
     publicUrl = null;
   }
 
-  function startNamed(): void {
-    const args = namedTunnelArgs();
-    if (!args) return;
-    if (child) stopChild();
-    spawnWithArgs(args, "named");
-  }
-
   function startQuickProcess(): void {
     if (child) stopChild();
-    spawnWithArgs(quickTunnelArgs(portStr), "quick");
+    spawnQuickProcess();
   }
 
   return {
     startAuto() {
-      if (namedTunnelArgs()) {
-        startNamed();
-        return;
-      }
       if (shouldAutoStartQuick()) startQuickProcess();
     },
     async startQuick() {
       if (mode === "quick" && publicUrl && child) return publicUrl;
 
-      await waitForNetwork();
+      if (!(await waitForNetwork())) {
+        throw new Error("No usable network connection is available");
+      }
       startQuickProcess();
 
       if (publicUrl) return publicUrl;
 
       return new Promise<string>((resolve, reject) => {
+        const waiter = {
+          resolve: (url: string) => {
+            clearTimeout(timer);
+            resolve(url);
+          },
+          reject: (err: Error) => {
+            clearTimeout(timer);
+            reject(err);
+          },
+        };
         const timer = setTimeout(() => {
-          urlWaiters = urlWaiters.filter((w) => w.resolve !== resolve);
+          urlWaiters = urlWaiters.filter((candidate) => candidate !== waiter);
           reject(
             new Error(
               "Timed out waiting for Cloudflare Tunnel URL. Is cloudflared installed and online?",
@@ -203,35 +189,11 @@ export function createTunnelManager(port: string | number): TunnelManager {
           );
         }, 45000);
 
-        urlWaiters.push({
-          resolve: (url) => {
-            clearTimeout(timer);
-            resolve(url);
-          },
-          reject: (err) => {
-            clearTimeout(timer);
-            reject(err);
-          },
-        });
+        urlWaiters.push(waiter);
       });
     },
     stop() {
       stopChild();
-    },
-    async restart() {
-      if (restarting) return;
-      const previous = mode;
-      restarting = true;
-      try {
-        await waitForNetwork();
-        if (previous === "quick") {
-          startQuickProcess();
-        } else if (previous === "named" || namedTunnelArgs()) {
-          startNamed();
-        }
-      } finally {
-        restarting = false;
-      }
     },
     getStatus() {
       return {
@@ -240,7 +202,6 @@ export function createTunnelManager(port: string | number): TunnelManager {
         publicUrl,
       };
     },
-    waitForNetwork,
   };
 }
 

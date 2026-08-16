@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import cookieParser from "cookie-parser";
 import express from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -13,13 +12,6 @@ import {
   passwordsMatch,
   sessionCookieName,
 } from "./auth.js";
-import {
-  assertLocalOnly,
-  getAgentStatus,
-  installAgent,
-  scheduleHandoffToAgent,
-  uninstallAgent,
-} from "./agent.js";
 import { createCapture, loadCaptureEnv } from "./capture.js";
 import { startControlPlane } from "./control-plane.js";
 import { loadDotEnv } from "./env.js";
@@ -30,39 +22,19 @@ loadDotEnv();
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(__dirname, "..", "public");
 const port = Number(process.env.PORT ?? "8787");
-const corsOrigins = (process.env.CORS_ORIGINS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
 
 const password = getPassword();
 
 const app = express();
+app.disable("x-powered-by");
 app.set("trust proxy", 1);
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (
-    origin &&
-    (corsOrigins.includes(origin) ||
-      corsOrigins.includes("*") ||
-      /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))
-  ) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization",
-    );
-  }
-  if (req.method === "OPTIONS") {
-    res.status(204).end();
-    return;
-  }
+app.use((_req, res, next) => {
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   next();
 });
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-app.use(cookieParser());
 app.use(express.static(publicDir, { index: false }));
 
 function isSecureRequest(req: express.Request): boolean {
@@ -71,29 +43,26 @@ function isSecureRequest(req: express.Request): boolean {
   return proto?.split(",")[0]?.trim() === "https";
 }
 
-function hasSession(req: express.Request): boolean {
-  return isValidSession(req.cookies?.[sessionCookieName()]);
-}
-
-function requireSessionApi(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction,
-): void {
-  if (!hasSession(req)) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
-  }
-  next();
-}
-
-function canManageLocally(req: express.Request): boolean {
+function cookieValue(
+  header: string | undefined,
+  name: string,
+): string | undefined {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const raw = header
+    ?.split(";")
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(prefix))
+    ?.slice(prefix.length);
+  if (!raw) return undefined;
   try {
-    assertLocalOnly(req);
-    return true;
+    return decodeURIComponent(raw);
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function hasSession(req: express.Request): boolean {
+  return isValidSession(cookieValue(req.headers.cookie, sessionCookieName()));
 }
 
 const tunnel = createTunnelManager(port);
@@ -101,7 +70,9 @@ let activeWatchToken: string | null = null;
 
 function isValidWatchToken(token: string | null | undefined): boolean {
   return Boolean(
-    token && activeWatchToken && token === activeWatchToken,
+    token &&
+      activeWatchToken &&
+      passwordsMatch(token, activeWatchToken),
   );
 }
 
@@ -110,6 +81,7 @@ app.get("/login", (req, res) => {
     res.redirect("/");
     return;
   }
+  res.setHeader("Cache-Control", "no-store");
   res.sendFile(join(publicDir, "login.html"));
 });
 
@@ -129,12 +101,13 @@ app.post("/login", (req, res) => {
 });
 
 app.post("/logout", (req, res) => {
-  destroySession(req.cookies?.[sessionCookieName()]);
+  destroySession(cookieValue(req.headers.cookie, sessionCookieName()));
   res.clearCookie(sessionCookieName(), { path: "/" });
   res.redirect("/login");
 });
 
 app.get("/api/health", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
   res.json({ ok: true });
 });
 
@@ -144,130 +117,12 @@ app.get("/embed", (req, res) => {
     res.status(401).type("text").send("Unauthorized");
     return;
   }
-  res.setHeader("Content-Security-Policy", "frame-ancestors *");
-  res.sendFile(join(publicDir, "embed.html"));
-});
-
-app.get("/api/tunnel", requireSessionApi, (req, res) => {
-  res.json({
-    ...tunnel.getStatus(),
-    canManage: canManageLocally(req),
-  });
-});
-
-app.post("/api/tunnel/start", requireSessionApi, async (req, res) => {
-  try {
-    assertLocalOnly(req);
-    const publicUrl = await tunnel.startQuick();
-    res.json({
-      ok: true,
-      mode: "quick",
-      publicUrl,
-      message: "Public link ready. Open it on your other device and log in.",
-    });
-  } catch (err) {
-    const status = (err as Error & { status?: number }).status ?? 500;
-    res.status(status).json({
-      error: err instanceof Error ? err.message : "tunnel start failed",
-    });
-  }
-});
-
-/** Local-only start for the Vercel Go live button (no session cookie). */
-app.post("/api/tunnel/start-bootstrap", async (req, res) => {
-  try {
-    assertLocalOnly(req);
-    const publicUrl = await tunnel.startQuick();
-    res.json({
-      ok: true,
-      mode: "quick",
-      publicUrl,
-      message: "Going live.",
-    });
-  } catch (err) {
-    const status = (err as Error & { status?: number }).status ?? 500;
-    res.status(status).json({
-      error: err instanceof Error ? err.message : "tunnel start failed",
-    });
-  }
-});
-
-app.post("/api/tunnel/stop", requireSessionApi, (req, res) => {
-  try {
-    assertLocalOnly(req);
-    tunnel.stop();
-    res.json({ ok: true, message: "Public link stopped." });
-  } catch (err) {
-    const status = (err as Error & { status?: number }).status ?? 500;
-    res.status(status).json({
-      error: err instanceof Error ? err.message : "tunnel stop failed",
-    });
-  }
-});
-
-app.get("/api/agent", requireSessionApi, async (req, res) => {
-  try {
-    const status = await getAgentStatus();
-    res.json({ ...status, canManage: canManageLocally(req) });
-  } catch (err) {
-    res.status(500).json({
-      error: err instanceof Error ? err.message : "status failed",
-    });
-  }
-});
-
-app.post("/api/agent/install", requireSessionApi, async (req, res) => {
-  try {
-    assertLocalOnly(req);
-    const result = await installAgent({ deferStart: true });
-    res.json({
-      ok: true,
-      deferred: result.deferred,
-      output: result.output,
-      message:
-        "Background service installed. This session will hand off shortly — you can close Terminal.",
-    });
-    scheduleHandoffToAgent();
-  } catch (err) {
-    const status = (err as Error & { status?: number }).status ?? 500;
-    res.status(status).json({
-      error: err instanceof Error ? err.message : "install failed",
-    });
-  }
-});
-
-/** Local-only install for the Vercel Go live button (no session cookie). */
-app.post("/api/agent/install-bootstrap", async (req, res) => {
-  try {
-    assertLocalOnly(req);
-    const result = await installAgent({ deferStart: true });
-    res.json({
-      ok: true,
-      deferred: result.deferred,
-      output: result.output,
-      message:
-        "Background service installed. Handing off — press Go live again in a moment.",
-    });
-    scheduleHandoffToAgent();
-  } catch (err) {
-    const status = (err as Error & { status?: number }).status ?? 500;
-    res.status(status).json({
-      error: err instanceof Error ? err.message : "install failed",
-    });
-  }
-});
-
-app.post("/api/agent/uninstall", requireSessionApi, async (req, res) => {
-  try {
-    assertLocalOnly(req);
-    const output = await uninstallAgent();
-    res.json({ ok: true, output, message: "Background service removed." });
-  } catch (err) {
-    const status = (err as Error & { status?: number }).status ?? 500;
-    res.status(status).json({
-      error: err instanceof Error ? err.message : "uninstall failed",
-    });
-  }
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  );
+  res.sendFile(join(publicDir, "index.html"));
 });
 
 app.get("/", (req, res) => {
@@ -275,17 +130,33 @@ app.get("/", (req, res) => {
     res.redirect("/login");
     return;
   }
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  );
   res.sendFile(join(publicDir, "index.html"));
 });
 
 const server = createServer(app);
 const wss = new WebSocketServer({ noServer: true });
 const clients = new Set<WebSocket>();
+const clientLiveness = new WeakMap<WebSocket, boolean>();
 
 function broadcast(jpeg: Buffer): void {
   for (const client of clients) {
-    if (client.readyState === client.OPEN) {
-      client.send(jpeg, { binary: true });
+    // A slow or backgrounded browser must never turn the WebSocket's internal
+    // queue into an unbounded archive of obsolete frames. The next frame is
+    // always more useful than an old one.
+    if (
+      client.readyState === client.OPEN &&
+      client.bufferedAmount <= jpeg.byteLength
+    ) {
+      try {
+        client.send(jpeg, { binary: true });
+      } catch {
+        client.terminate();
+      }
     }
   }
 }
@@ -293,24 +164,51 @@ function broadcast(jpeg: Buffer): void {
 const capture = createCapture({
   ...loadCaptureEnv(),
   onFrame: broadcast,
-  onWake: async () => {
-    await tunnel.restart();
-  },
 });
 
 const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
-const agentToken = process.env.AGENT_TOKEN?.trim();
-const shareOnStart =
-  process.env.SHARE_ON_START === "1" ||
-  process.env.SHARE_ON_START === "true";
+const agentToken =
+  process.env.PROSTAR_AGENT_SECRET?.trim() ||
+  process.env.AGENT_TOKEN?.trim();
+const configuredClientId = process.env.PROSTAR_CLIENT_ID?.trim().toLowerCase();
+const clientId =
+  configuredClientId &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+    configuredClientId,
+  )
+    ? configuredClientId
+    : undefined;
+
+app.post("/api/capture/preflight", async (req, res) => {
+  const authorization = req.get("authorization") ?? "";
+  const provided = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : "";
+  if (!agentToken || !provided || !passwordsMatch(provided, agentToken)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  try {
+    await capture.preflight();
+    res.status(204).end();
+  } catch (error) {
+    res.status(503).json({
+      error:
+        error instanceof Error
+          ? error.message
+          : "Screen Recording permission is unavailable",
+    });
+  }
+});
+
 const controlPlane =
   controlPlaneUrl && agentToken
     ? startControlPlane({
         baseUrl: controlPlaneUrl,
         token: agentToken,
+        clientId,
         tunnel,
-        port,
-        shareOnStart,
         onWatchToken: (token) => {
           activeWatchToken = token;
         },
@@ -319,7 +217,13 @@ const controlPlane =
 
 if (controlPlaneUrl && !agentToken) {
   console.warn(
-    "[control-plane] CONTROL_PLANE_URL set but AGENT_TOKEN missing — pairing disabled",
+    "[control-plane] CONTROL_PLANE_URL set but Prostar agent credential missing — pairing disabled",
+  );
+}
+
+if (controlPlaneUrl && agentToken && configuredClientId && !clientId) {
+  console.warn(
+    "[control-plane] PROSTAR_CLIENT_ID is invalid — using legacy single-session mode",
   );
 }
 
@@ -332,12 +236,17 @@ server.on("upgrade", (req, socket, head) => {
       return;
     }
 
-    const cookieHeader = req.headers.cookie ?? "";
-    const match = cookieHeader
-      .split(";")
-      .map((c) => c.trim())
-      .find((c) => c.startsWith(`${sessionCookieName()}=`));
-    const sessionToken = match?.slice(sessionCookieName().length + 1);
+    const origin = req.headers.origin;
+    if (!origin || new URL(origin).host !== host) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    const sessionToken = cookieValue(
+      req.headers.cookie,
+      sessionCookieName(),
+    );
     const watchToken = url.searchParams.get("token");
     if (!isValidSession(sessionToken) && !isValidWatchToken(watchToken)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -347,46 +256,90 @@ server.on("upgrade", (req, socket, head) => {
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       clients.add(ws);
-      ws.on("close", () => clients.delete(ws));
+      clientLiveness.set(ws, true);
+      controlPlane?.setViewerCount(clients.size);
+      if (clients.size === 1) {
+        console.log("[capture] first viewer connected; starting capture");
+        capture.start();
+      }
+
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clients.delete(ws);
+        controlPlane?.setViewerCount(clients.size);
+        if (clients.size === 0) {
+          console.log("[capture] no viewers; pausing capture");
+          capture.stop();
+        }
+      };
+      ws.on("pong", () => clientLiveness.set(ws, true));
+      ws.once("close", cleanup);
+      ws.once("error", () => {
+        cleanup();
+        ws.terminate();
+      });
     });
   } catch {
     socket.destroy();
   }
 });
 
-// When paired with a dashboard, bind on all interfaces so LAN watch works
-// if Cloudflare Tunnel is unavailable on the sharing Mac.
-const bindHost = controlPlaneUrl ? "0.0.0.0" : "127.0.0.1";
+const heartbeat = setInterval(() => {
+  for (const client of clients) {
+    if (
+      client.readyState !== client.OPEN ||
+      !clientLiveness.get(client)
+    ) {
+      client.terminate();
+      continue;
+    }
+    clientLiveness.set(client, false);
+    try {
+      client.ping();
+    } catch {
+      client.terminate();
+    }
+  }
+}, 30_000);
+heartbeat.unref();
+
+// The agent never needs an inbound LAN listener. Cloudflare connects to this
+// loopback origin, which also avoids firewall prompts and local exposure.
+const bindHost = "127.0.0.1";
 server.listen(port, bindHost, () => {
   console.log(`[server] listening on http://${bindHost}:${port}`);
-  if (bindHost === "127.0.0.1") {
-    console.log(
-      "[server] bind is localhost-only; use Cloudflare Tunnel for remote access",
-    );
-  } else {
-    console.log(
-      "[server] LAN bind enabled for dashboard pairing (tunnel preferred, LAN fallback)",
-    );
-  }
-  capture.start();
+  console.log(
+    "[server] localhost-only; use Cloudflare Tunnel for remote access",
+  );
   tunnel.startAuto();
 });
 
-function shutdown(): void {
+let shuttingDown = false;
+
+function shutdown(exitCode = 0): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log("[server] shutting down");
-  controlPlane?.stop();
+  clearInterval(heartbeat);
   capture.stop();
   tunnel.stop();
   for (const client of clients) client.close();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 3000).unref();
+  const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+  void Promise.all([controlPlane?.stop(), serverClosed]).finally(() => {
+    process.exit(exitCode);
+  });
+  setTimeout(() => process.exit(exitCode), 3000).unref();
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => shutdown());
+process.on("SIGTERM", () => shutdown());
 process.on("uncaughtException", (err) => {
   console.error("[server] uncaughtException:", err);
+  shutdown(1);
 });
 process.on("unhandledRejection", (err) => {
   console.error("[server] unhandledRejection:", err);
+  shutdown(1);
 });

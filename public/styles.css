@@ -81,10 +81,13 @@ button {
   padding: 12px 16px;
   width: 100%;
   cursor: pointer;
+  transition: transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-button:active {
-  transform: scale(0.98);
+@media (hover: hover) and (pointer: fine) {
+  button:active {
+    transform: scale(0.98);
+  }
 }
 
 .error {
@@ -101,125 +104,8 @@ button:active {
   background: #000;
 }
 
-.viewer-body.stream-only .viewer-stage {
-  flex: 1;
-}
-
-.viewer-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  padding-top: max(10px, env(safe-area-inset-top));
-  background: rgba(14, 17, 20, 0.92);
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.status {
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.status.live {
-  color: #6dcaa5;
-}
-
-.status.error {
-  color: var(--danger);
-}
-
-.logout,
-.bar-btn {
-  width: auto;
-  padding: 8px 12px;
-  font-size: 0.85rem;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
-}
-
-.viewer-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.viewer-actions form {
-  margin: 0;
-}
-
-#agent-btn:not([hidden]) {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
-
-.primary-btn:not([hidden]) {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.primary-btn.live-btn {
-  background: color-mix(in srgb, var(--danger) 85%, #000);
-  border-color: transparent;
-}
-
-.share-panel {
-  padding: 10px 14px 12px;
-  background: #12161a;
-  border-bottom: 1px solid var(--border);
-}
-
-.share-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-}
-
-.share-label {
-  font-size: 0.8rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.share-link {
-  flex: 1 1 220px;
-  min-width: 0;
-  color: #8ec5ff;
-  font-size: 0.9rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.share-hint {
-  margin: 8px 0 0;
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-
-.agent-msg {
-  margin: 0;
-  padding: 8px 14px;
-  font-size: 0.85rem;
-  color: var(--muted);
-  background: #12161a;
-  border-bottom: 1px solid var(--border);
-}
-
-.agent-msg.ok {
-  color: #6dcaa5;
-}
-
-.agent-msg.err {
-  color: var(--danger);
-}
-
 .viewer-stage {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: grid;
@@ -238,4 +124,39 @@ button:active {
   user-select: none;
   -webkit-user-select: none;
   touch-action: manipulation;
+  transition: opacity 140ms ease;
+}
+
+#frame.stale {
+  opacity: 0.35;
+}
+
+.viewer-status {
+  position: absolute;
+  left: 50%;
+  bottom: max(24px, env(safe-area-inset-bottom));
+  translate: -50% 0;
+  max-width: min(90vw, 440px);
+  padding: 9px 13px;
+  border: 1px solid #343b42;
+  border-radius: 999px;
+  background: rgb(18 22 26 / 88%);
+  color: var(--text);
+  font-size: 0.85rem;
+  text-align: center;
+  backdrop-filter: blur(12px);
+}
+
+.viewer-status[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+
+  #frame {
+    transition: none;
+  }
 }

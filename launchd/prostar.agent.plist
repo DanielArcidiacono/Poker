@@ -3,11 +3,10 @@
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>com.local.screenviewer</string>
+    <string>prostar.agent</string>
     <key>ProgramArguments</key>
     <array>
       <string>__NODE_BIN__</string>
-      <string>__TSX_BIN__</string>
       <string>__SERVER_ENTRY__</string>
     </array>
     <key>WorkingDirectory</key>
@@ -23,15 +22,15 @@
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/screenviewer.out.log</string>
+    <string>__LOG_DIR__/prostar.out.log</string>
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/screenviewer.err.log</string>
+    <string>__LOG_DIR__/prostar.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
       <key>PATH</key>
       <string>__PATH__</string>
-      <key>VIEWER_PASSWORD</key>
-      <string>__VIEWER_PASSWORD__</string>
+      <key>PROSTAR_VIEWER_PASSWORD</key>
+      <string>__PROSTAR_VIEWER_PASSWORD__</string>
       <key>PORT</key>
       <string>__PORT__</string>
       <key>FPS</key>
@@ -40,20 +39,16 @@
       <string>__JPEG_QUALITY__</string>
       <key>SCALE</key>
       <string>__SCALE__</string>
-      <key>CLOUDFLARED_TOKEN</key>
-      <string>__CLOUDFLARED_TOKEN__</string>
-      <key>CLOUDFLARED_CONFIG</key>
-      <string>__CLOUDFLARED_CONFIG__</string>
+      <key>MAX_WIDTH</key>
+      <string>__MAX_WIDTH__</string>
       <key>AUTO_TUNNEL</key>
       <string>__AUTO_TUNNEL__</string>
-      <key>SHARE_ON_START</key>
-      <string>__SHARE_ON_START__</string>
       <key>CONTROL_PLANE_URL</key>
       <string>__CONTROL_PLANE_URL__</string>
-      <key>AGENT_TOKEN</key>
-      <string>__AGENT_TOKEN__</string>
-      <key>CORS_ORIGINS</key>
-      <string>__CORS_ORIGINS__</string>
+      <key>PROSTAR_CLIENT_ID</key>
+      <string>__PROSTAR_CLIENT_ID__</string>
+      <key>PROSTAR_AGENT_SECRET</key>
+      <string>__PROSTAR_AGENT_SECRET__</string>
     </dict>
   </dict>
 </plist>

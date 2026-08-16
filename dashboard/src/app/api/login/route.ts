@@ -4,17 +4,13 @@ import {
   SESSION_COOKIE,
   sessionTokenForPassword,
 } from "@/lib/auth";
-import { getDashboardPassword } from "@/lib/store";
+import { getDashboardPassword } from "@/lib/config";
 
-function requestOrigin(req: Request): string {
-  const host =
-    req.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
-    req.headers.get("host") ||
-    "127.0.0.1:3000";
-  const proto =
-    req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
-    (host.startsWith("localhost") || host.startsWith("127.") ? "http" : "http");
-  return `${proto}://${host}`;
+function safeNext(value: FormDataEntryValue | null): string {
+  const next = String(value ?? "");
+  return next === "/" || /^\/watch\/[0-9a-f-]{36}$/.test(next)
+    ? next
+    : "/";
 }
 
 export async function POST(req: Request) {
@@ -31,9 +27,11 @@ export async function POST(req: Request) {
   }
 
   let password = "";
+  let next = "/";
   if (isForm) {
     const form = await req.formData();
     password = String(form.get("password") ?? "");
+    next = safeNext(form.get("next"));
   } else {
     const body = (await req.json().catch(() => null)) as {
       password?: string;
@@ -43,16 +41,19 @@ export async function POST(req: Request) {
 
   if (!checkPassword(password)) {
     if (isForm) {
-      return NextResponse.redirect(
-        new URL("/watch?error=1", requestOrigin(req)),
-        303,
-      );
+      return new NextResponse(null, {
+        status: 303,
+        headers: { Location: `${next}?error=1` },
+      });
     }
     return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
   }
 
   const res = isForm
-    ? NextResponse.redirect(new URL("/watch", requestOrigin(req)), 303)
+    ? new NextResponse(null, {
+        status: 303,
+        headers: { Location: next },
+      })
     : NextResponse.json({ ok: true });
   res.cookies.set(SESSION_COOKIE, sessionTokenForPassword(password), {
     httpOnly: true,

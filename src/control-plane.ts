@@ -1,10 +1,9 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { hostname as osHostname } from "node:os";
-import { getLanBaseUrl } from "./lan.js";
 
 export type ControlPlaneHandle = {
-  stop: () => void;
-  getWatchToken: () => string | null;
+  setViewerCount: (count: number) => void;
+  stop: () => Promise<void>;
 };
 
 type TunnelLike = {
@@ -20,14 +19,27 @@ type TunnelLike = {
 type Options = {
   baseUrl: string;
   token: string;
+  clientId?: string;
   tunnel: TunnelLike;
-  /** Local agent HTTP port — used for LAN stream fallback. */
-  port: number | string;
   pollMs?: number;
-  /** Start tunnel + push URL to dashboard as soon as the agent boots. */
-  shareOnStart?: boolean;
+  disconnectGraceMs?: number;
+  retryBaseMs?: number;
   onWatchToken?: (token: string | null) => void;
 };
+
+type AgentStatus = {
+  recording: boolean;
+  publicUrl: string | null;
+  watchToken: string | null;
+  viewerCount: number;
+  message: string | null;
+};
+
+const LIVE_STATUS_REPUBLISH_MS = 60_000;
+const CONTROL_PLANE_DISCONNECT_GRACE_MS = 60_000;
+const MAX_START_RETRY_MS = 60_000;
+const PRODUCT_NAME = "Prostar";
+const AGENT_VERSION = "1.0.0";
 
 async function postJson(
   url: string,
@@ -39,46 +51,87 @@ async function postJson(
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
+      "User-Agent": `${PRODUCT_NAME}/${AGENT_VERSION}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
   });
 }
 
 export function startControlPlane(options: Options): ControlPlaneHandle {
-  const pollMs = options.pollMs ?? 2000;
+  const pollMs = options.pollMs ?? 5_000;
+  const disconnectGraceMs =
+    options.disconnectGraceMs ?? CONTROL_PLANE_DISCONNECT_GRACE_MS;
+  const retryBaseMs = options.retryBaseMs ?? 5_000;
   const host = osHostname();
+  const instanceId = randomUUID();
+  const base = options.baseUrl.replace(/\/$/, "");
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let handling = false;
-  let watchToken: string | null = null;
-  /** When set, we are live (tunnel or LAN) until stop_recording. */
+  let reconciled = false;
+  let ownsLease = false;
+  let lastSharingRevision: string | null = null;
   let activeStreamUrl: string | null = null;
-  let activeMessage: string | null = null;
-  let wantShareOnStart = Boolean(options.shareOnStart);
-
-  const base = options.baseUrl.replace(/\/$/, "");
+  let currentStatus: AgentStatus = {
+    recording: false,
+    publicUrl: null,
+    watchToken: null,
+    viewerCount: 0,
+    message: "Ready to share.",
+  };
+  let statusDirty = false;
+  let lastStatusReportAt = 0;
+  let statusPublishInFlight: Promise<boolean> | null = null;
+  let lastSuccessfulOwnerPollAt = Date.now();
+  let startFailureCount = 0;
+  let nextStartAttemptAt = 0;
 
   function setWatchToken(token: string | null): void {
-    watchToken = token;
     options.onWatchToken?.(token);
   }
 
-  async function report(status: {
-    recording: boolean;
-    publicUrl?: string | null;
-    watchToken?: string | null;
-    message?: string | null;
-  }): Promise<void> {
-    try {
-      await postJson(`${base}/api/agent/status`, options.token, {
-        ...status,
-        watchToken:
-          status.watchToken !== undefined ? status.watchToken : watchToken,
-        hostname: host,
-      });
-    } catch (err) {
-      console.error("[control-plane] status report failed:", err);
+  async function publishCurrentStatus(): Promise<boolean> {
+    if (!ownsLease) return false;
+    if (statusPublishInFlight) return statusPublishInFlight;
+    const snapshot = currentStatus;
+    statusPublishInFlight = (async () => {
+      try {
+        const res = await postJson(`${base}/api/agent/status`, options.token, {
+          ...snapshot,
+          clientId: options.clientId,
+          hostname: host,
+          product: PRODUCT_NAME,
+          version: AGENT_VERSION,
+          sharingRevision: lastSharingRevision,
+          agentInstanceId: instanceId,
+        });
+        if (!res.ok) {
+          throw new Error(`dashboard returned HTTP ${res.status}`);
+        }
+        if (currentStatus === snapshot) statusDirty = false;
+        lastStatusReportAt = Date.now();
+        return true;
+      } catch (err) {
+        statusDirty = true;
+        console.error("[control-plane] status report failed:", err);
+        return false;
+      }
+    })();
+    const published = await statusPublishInFlight;
+    statusPublishInFlight = null;
+    // A viewer or tunnel change that arrived while the request was in flight is
+    // published only after the older snapshot settles, so status cannot regress.
+    if (currentStatus !== snapshot && ownsLease && !stopped) {
+      return publishCurrentStatus();
     }
+    return published;
+  }
+
+  async function setStatus(status: AgentStatus): Promise<void> {
+    currentStatus = status;
+    statusDirty = true;
+    await publishCurrentStatus();
   }
 
   async function goLiveWithUrl(
@@ -86,85 +139,150 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
     message: string,
   ): Promise<void> {
     const token = randomBytes(24).toString("hex");
-    setWatchToken(token);
     activeStreamUrl = streamUrl;
-    activeMessage = message;
-    await report({
+    setWatchToken(token);
+    await setStatus({
       recording: true,
       publicUrl: streamUrl,
       watchToken: token,
+      viewerCount: currentStatus.viewerCount,
       message,
     });
   }
 
-  async function handleCommand(command: { type: string }): Promise<void> {
-    if (command.type === "start_recording") {
-      await report({
-        recording: false,
-        message: "Starting Cloudflare tunnel…",
-      });
+  async function startSharing(): Promise<void> {
+    // Revoke the previous local link before publishing the transition.
+    options.tunnel.stop();
+    activeStreamUrl = null;
+    setWatchToken(null);
+    await setStatus({
+      recording: false,
+      publicUrl: null,
+      watchToken: null,
+      viewerCount: currentStatus.viewerCount,
+      message: "Starting secure tunnel…",
+    });
 
-      // Always prefer Cloudflare Tunnel so Watch works even when macOS
-      // firewall blocks inbound LAN connections to :8787.
-      const keepAlive = setInterval(() => {
-        void report({
-          recording: false,
-          message: "Starting Cloudflare tunnel…",
-        });
-      }, 8_000);
-
-      try {
-        // A quick-tunnel process can remain alive after its hostname stops
-        // resolving. A start command means "replace the tunnel", not "reuse
-        // whatever child process exists".
-        options.tunnel.stop();
-        const publicUrl = await options.tunnel.startQuick();
-        clearInterval(keepAlive);
-        await goLiveWithUrl(publicUrl, "Recording — public link ready.");
-      } catch (err) {
-        clearInterval(keepAlive);
-        options.tunnel.stop();
-        const lanUrl = getLanBaseUrl(options.port, base);
-        if (lanUrl) {
-          const reason =
-            err instanceof Error ? err.message : "Tunnel unavailable";
-          console.warn(
-            `[control-plane] tunnel failed (${reason}); falling back to LAN ${lanUrl}`,
-          );
-          await goLiveWithUrl(
-            lanUrl,
-            `Recording on LAN (${lanUrl}). If Watch is blank, allow Node through Firewall or fix tunnel: ${reason}`,
-          );
-          return;
-        }
-        setWatchToken(null);
-        activeStreamUrl = null;
-        activeMessage = null;
-        await report({
-          recording: false,
-          publicUrl: null,
-          watchToken: null,
-          message:
-            err instanceof Error ? err.message : "Failed to start tunnel",
-        });
-      } finally {
-        clearInterval(keepAlive);
-      }
-      return;
-    }
-
-    if (command.type === "stop_recording") {
+    try {
+      // A quick-tunnel process may remain alive after its hostname expires.
+      // A desired-state transition replaces it instead of trusting stale state.
+      const publicUrl = await options.tunnel.startQuick();
+      startFailureCount = 0;
+      nextStartAttemptAt = 0;
+      await goLiveWithUrl(publicUrl, "Live — secure link ready.");
+    } catch (err) {
       options.tunnel.stop();
-      setWatchToken(null);
       activeStreamUrl = null;
-      activeMessage = null;
-      await report({
+      setWatchToken(null);
+      startFailureCount += 1;
+      const retryDelay = Math.min(
+        MAX_START_RETRY_MS,
+        retryBaseMs * 2 ** Math.min(startFailureCount - 1, 6),
+      );
+      nextStartAttemptAt = Date.now() + retryDelay;
+      console.error("[control-plane] secure tunnel failed:", err);
+      await setStatus({
         recording: false,
         publicUrl: null,
         watchToken: null,
-        message: "Recording stopped.",
+        viewerCount: currentStatus.viewerCount,
+        message: "Could not start the secure link. Retrying shortly.",
       });
     }
+  }
+
+  async function stopSharing(message = "Sharing stopped."): Promise<void> {
+    options.tunnel.stop();
+    activeStreamUrl = null;
+    setWatchToken(null);
+    startFailureCount = 0;
+    nextStartAttemptAt = 0;
+    await setStatus({
+      recording: false,
+      publicUrl: null,
+      watchToken: null,
+      viewerCount: 0,
+      message,
+    });
+  }
+
+  async function reconcileSharing(
+    shouldShare: boolean,
+    sharingRevision: string,
+  ): Promise<void> {
+    const tunnelStatus = options.tunnel.getStatus();
+    const desiredStateChanged =
+      lastSharingRevision !== null && sharingRevision !== lastSharingRevision;
+    // Status updates are accepted only for the desired-state generation that
+    // produced them. This makes an in-flight start harmless after Stop.
+    lastSharingRevision = sharingRevision;
+
+    if (!shouldShare) {
+      if (
+        !reconciled ||
+        activeStreamUrl ||
+        currentStatus.recording ||
+        tunnelStatus.mode === "quick"
+      ) {
+        await stopSharing(reconciled ? "Sharing stopped." : "Ready to share.");
+      }
+      reconciled = true;
+      return;
+    }
+
+    reconciled = true;
+    if (desiredStateChanged) {
+      startFailureCount = 0;
+      nextStartAttemptAt = 0;
+      await startSharing();
+    } else if (!activeStreamUrl && Date.now() >= nextStartAttemptAt) {
+      if (
+        tunnelStatus.running &&
+        tunnelStatus.mode === "quick" &&
+        tunnelStatus.publicUrl
+      ) {
+        await goLiveWithUrl(tunnelStatus.publicUrl, "Live — secure link ready.");
+      } else {
+        await startSharing();
+      }
+    } else if (activeStreamUrl && !tunnelStatus.running) {
+      await startSharing();
+    } else if (
+      tunnelStatus.mode === "quick" &&
+      tunnelStatus.publicUrl &&
+      tunnelStatus.publicUrl !== activeStreamUrl
+    ) {
+      await goLiveWithUrl(
+        tunnelStatus.publicUrl,
+        "Live — tunnel restored after reconnecting.",
+      );
+    }
+  }
+
+  function failClosedIfDisconnected(): void {
+    if (
+      Date.now() - lastSuccessfulOwnerPollAt < disconnectGraceMs ||
+      (!activeStreamUrl &&
+        !currentStatus.recording &&
+        options.tunnel.getStatus().mode !== "quick")
+    ) {
+      return;
+    }
+    console.error(
+      "[control-plane] dashboard connection expired; stopping screen sharing",
+    );
+    options.tunnel.stop();
+    activeStreamUrl = null;
+    setWatchToken(null);
+    ownsLease = false;
+    currentStatus = {
+      recording: false,
+      publicUrl: null,
+      watchToken: null,
+      viewerCount: 0,
+      message: "Ready to share.",
+    };
+    statusDirty = true;
   }
 
   async function tick(): Promise<void> {
@@ -172,76 +290,40 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
     handling = true;
     try {
       const res = await postJson(`${base}/api/agent/poll`, options.token, {
+        clientId: options.clientId,
         hostname: host,
+        product: PRODUCT_NAME,
+        version: AGENT_VERSION,
+        agentInstanceId: instanceId,
       });
       if (!res.ok) {
         console.error("[control-plane] poll failed:", res.status);
+        failClosedIfDisconnected();
         return;
       }
       const data = (await res.json()) as {
-        command?: { type: string } | null;
+        shouldShare?: boolean;
+        isOwner?: boolean;
+        sharingRevision?: string;
       };
-      if (data.command) {
-        console.log("[control-plane] command:", data.command.type);
-        await handleCommand(data.command);
-      } else if (wantShareOnStart && !activeStreamUrl) {
-        wantShareOnStart = false;
-        console.log("[control-plane] SHARE_ON_START — going live automatically");
-        await handleCommand({ type: "start_recording" });
-      } else if (activeStreamUrl && watchToken) {
-        const st = options.tunnel.getStatus();
-        if (
-          st.running &&
-          st.mode === "quick" &&
-          st.publicUrl &&
-          st.publicUrl !== activeStreamUrl
-        ) {
-          // cloudflared restarted after a reboot/network failure and received
-          // a different quick-tunnel hostname. Publish it immediately.
-          await goLiveWithUrl(
-            st.publicUrl,
-            "Recording — tunnel restored after restart.",
-          );
-        } else if (!st.running) {
-          activeStreamUrl = null;
-          activeMessage = null;
-          setWatchToken(null);
-          await report({
-            recording: false,
-            publicUrl: null,
-            watchToken: null,
-            message: "Reconnecting Cloudflare tunnel…",
-          });
-        } else {
-          await report({
-            recording: true,
-            publicUrl: activeStreamUrl,
-            watchToken,
-            message: activeMessage,
-          });
-        }
-      } else {
-        const st = options.tunnel.getStatus();
-        if (st.running && st.mode === "quick" && st.publicUrl) {
-          if (!watchToken) setWatchToken(randomBytes(24).toString("hex"));
-          activeStreamUrl = st.publicUrl;
-          activeMessage = activeMessage || "Recording — public link ready.";
-          await report({
-            recording: true,
-            publicUrl: st.publicUrl,
-            watchToken,
-            message: activeMessage,
-          });
-        } else {
-          // Idle heartbeat only — do not send publicUrl:null (wipes dashboard).
-          await report({
-            recording: false,
-            message: null,
-          });
-        }
+      ownsLease = Boolean(data.isOwner);
+      if (ownsLease) lastSuccessfulOwnerPollAt = Date.now();
+      await reconcileSharing(
+        Boolean(data.isOwner && data.shouldShare),
+        typeof data.sharingRevision === "string" ? data.sharingRevision : "0",
+      );
+
+      if (
+        ownsLease &&
+        (statusDirty ||
+        (currentStatus.recording &&
+          Date.now() - lastStatusReportAt >= LIVE_STATUS_REPUBLISH_MS))
+      ) {
+        await publishCurrentStatus();
       }
     } catch (err) {
       console.error("[control-plane] poll error:", err);
+      failClosedIfDisconnected();
     } finally {
       handling = false;
       if (!stopped) {
@@ -256,12 +338,32 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
   void tick();
 
   return {
-    stop() {
+    setViewerCount(count) {
+      const viewerCount = Math.max(0, Math.floor(count));
+      if (currentStatus.viewerCount === viewerCount) return;
+      currentStatus = { ...currentStatus, viewerCount };
+      statusDirty = true;
+      if (ownsLease && !handling) void publishCurrentStatus();
+    },
+    async stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
-    },
-    getWatchToken() {
-      return watchToken;
+      try {
+        await fetch(`${base}/api/agent/poll`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${options.token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            clientId: options.clientId,
+            agentInstanceId: instanceId,
+          }),
+          signal: AbortSignal.timeout(2_000),
+        });
+      } catch {
+        // The lease expires on its own after an ungraceful/offline shutdown.
+      }
     },
   };
 }

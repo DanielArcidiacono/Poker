@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Screen Viewer Dashboard",
-  description: "Start Mac screen sharing from anywhere",
+  title: "Prostar",
+  description: "Manage active Prostar screen-sharing sessions",
 };
 
 export default function RootLayout({

@@ -2,9 +2,11 @@
 /node_modules
 /.next/
 /out/
-.data/
 .env
 .env.local
 .DS_Store
 *.log
-dashboard/tsconfig.tsbuildinfo
+public/screen-viewer-agent.tgz
+public/prostar-agent.tgz
+public/prostar-agent.tgz.sha256
+tsconfig.tsbuildinfo

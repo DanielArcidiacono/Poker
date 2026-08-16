@@ -11,7 +11,7 @@ export function InstallClient({
 }) {
   const [hint, setHint] = useState("");
   const textRef = useRef<HTMLTextAreaElement>(null);
-  const watchUrl = `${origin.replace(/\/$/, "")}/watch`;
+  const dashboardUrl = origin.replace(/\/$/, "");
 
   function selectCommand() {
     const el = textRef.current;
@@ -57,16 +57,15 @@ export function InstallClient({
   return (
     <main className="shell">
       <div className="card prompt" style={{ width: "min(100%, 520px)" }}>
-        <h1>Share this Mac</h1>
+        <h1>Set up Prostar</h1>
         <p className="muted">
-          Installs a background agent on this Mac, publishes the stream to the
-          dashboard, then you can quit Terminal. On computer 1 always open:
+          Installs Prostar on this Mac. After setup, manage its session from:
         </p>
         <p className="ok-line" style={{ marginTop: 8 }}>
-          <a href={watchUrl}>{watchUrl}</a>
+          <a href={dashboardUrl}>{dashboardUrl}</a>
         </p>
         <p className="muted" style={{ marginTop: 12 }}>
-          Needs <strong>Node.js</strong> (
+          Needs <strong>Node.js 20.9+</strong> (
           <a href="https://nodejs.org" target="_blank" rel="noreferrer">
             nodejs.org
           </a>
@@ -81,12 +80,12 @@ export function InstallClient({
           onFocus={selectCommand}
           onClick={selectCommand}
           rows={2}
-          aria-label="Share command"
+          aria-label="Prostar setup command"
         />
 
         <div className="actions">
           <button type="button" onClick={copyOrSelect}>
-            Select command
+            Copy command
           </button>
           <a className="button-link" href={origin || "/"}>
             Back
@@ -109,17 +108,22 @@ export function InstallClient({
             share.
           </li>
           <li>
-            Wait until it prints the stable watch URL (same as above).
+            Approve the Screen Recording request when macOS shows it, then wait
+            for <strong>Prostar installed successfully.</strong>
           </li>
           <li>
-            On computer 1 open that <strong>/watch</strong> page (password{" "}
-            <code>change-me</code>).
+            On the viewing device, return to the <strong>dashboard</strong> and
+            press Go live.
           </li>
           <li>
-            You can quit Terminal on computer 2 — sharing keeps running until you
-            uninstall the agent.
+            You can quit Terminal on the Mac. Use <strong>Stop</strong> on the
+            Prostar dashboard whenever you are done.
           </li>
         </ol>
+        <p className="muted" style={{ marginTop: 14 }}>
+          Production setup stays quiet and prints only its final result. Run
+          <code> prostar-admin </code> on the Mac for status, controls, or logs.
+        </p>
       </div>
     </main>
   );

@@ -1,12 +1,14 @@
 {
-  "name": "screen-viewer-dashboard",
+  "name": "prostar-dashboard",
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "prebuild": "node scripts/build-agent-bundle.mjs",
+    "predev": "node scripts/build-agent-bundle.mjs",
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3000",
-    "lint": "next lint"
+    "check": "tsc --noEmit"
   },
   "dependencies": {
     "@upstash/redis": "^1.34.5",
