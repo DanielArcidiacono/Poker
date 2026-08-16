@@ -1,14 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-const SESSION_COOKIE = "screen_viewer_session";
+const SESSION_COOKIE = "prostar_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-type Session = {
-  token: string;
-  expiresAt: number;
-};
-
-const sessions = new Map<string, Session>();
+const sessions = new Map<string, number>();
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -16,16 +11,18 @@ function hashToken(token: string): string {
 
 function pruneSessions(): void {
   const now = Date.now();
-  for (const [key, session] of sessions) {
-    if (session.expiresAt <= now) sessions.delete(key);
+  for (const [key, expiresAt] of sessions) {
+    if (expiresAt <= now) sessions.delete(key);
   }
 }
 
 export function getPassword(): string {
-  const password = process.env.VIEWER_PASSWORD?.trim();
-  if (!password) {
+  const password =
+    process.env.PROSTAR_VIEWER_PASSWORD?.trim() ||
+    process.env.VIEWER_PASSWORD?.trim();
+  if (!password || password === "change-me" || password.length < 12) {
     throw new Error(
-      "VIEWER_PASSWORD is required. Set it in the environment or a .env file.",
+      "PROSTAR_VIEWER_PASSWORD must be at least 12 characters and cannot be 'change-me'.",
     );
   }
   return password;
@@ -45,16 +42,16 @@ export function createSession(): { token: string; maxAgeSec: number } {
   pruneSessions();
   const token = randomBytes(32).toString("hex");
   const expiresAt = Date.now() + SESSION_TTL_MS;
-  sessions.set(hashToken(token), { token, expiresAt });
+  sessions.set(hashToken(token), expiresAt);
   return { token, maxAgeSec: Math.floor(SESSION_TTL_MS / 1000) };
 }
 
 export function isValidSession(token: string | undefined): boolean {
   if (!token) return false;
   pruneSessions();
-  const session = sessions.get(hashToken(token));
-  if (!session) return false;
-  if (session.expiresAt <= Date.now()) {
+  const expiresAt = sessions.get(hashToken(token));
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
     sessions.delete(hashToken(token));
     return false;
   }

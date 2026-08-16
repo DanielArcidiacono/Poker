@@ -7,12 +7,15 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <title>Screen Viewer</title>
+    <title>Prostar</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body class="viewer-body stream-only">
+  <body class="viewer-body">
     <main class="viewer-stage">
-      <img id="frame" alt="Live Mac screen" draggable="false" />
+      <img id="frame" alt="Live Prostar session" draggable="false" />
+      <div id="viewer-status" class="viewer-status" role="status">
+        Connecting…
+      </div>
     </main>
     <script src="/viewer.js"></script>
   </body>

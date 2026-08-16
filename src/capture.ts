@@ -1,85 +1,118 @@
-import screenshot from "screenshot-desktop";
+import { execFile } from "node:child_process";
+import { readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import type sharpModule from "sharp";
 
 export type CaptureOptions = {
   fps: number;
   jpegQuality: number;
   scale: number;
+  maxWidth: number;
   displayId?: number;
-  wakeGapMs?: number;
-  onWake?: () => void | Promise<void>;
   onFrame: (jpeg: Buffer) => void;
 };
 
 export type CaptureController = {
   start: () => void;
   stop: () => void;
-  reinit: () => Promise<void>;
+  preflight: () => Promise<void>;
 };
 
-async function grabFrame(options: CaptureOptions): Promise<Buffer> {
-  const raw = await screenshot({
-    format: "png",
-    screen: options.displayId,
-  });
+type SharpModule = typeof sharpModule;
 
-  // Dynamic import so a broken sharp install does not crash the whole agent
-  // (control-plane heartbeats can still keep the Mac "online").
-  const sharp = (await import("sharp")).default;
+const execFileAsync = promisify(execFile);
+const capturePath = join(tmpdir(), `prostar-${process.pid}.jpg`);
+let sharpPromise: Promise<SharpModule> | null = null;
+
+function loadSharp(): Promise<SharpModule> {
+  if (!sharpPromise) {
+    sharpPromise = import("sharp").then((module) => {
+      const sharp = module.default as SharpModule;
+      // A live stream only ever processes one frame at a time. Keep libvips'
+      // cache deliberately small instead of retaining tens of megabytes while
+      // the viewer is idle.
+      sharp.cache({ memory: 16, files: 0, items: 8 });
+      sharp.concurrency(1);
+      return sharp;
+    });
+  }
+  return sharpPromise;
+}
+
+async function grabRawFrame(options: CaptureOptions): Promise<Buffer> {
+  const args = ["-x", "-r", "-t", "jpg"];
+  if (options.displayId === undefined) args.push("-m");
+  else args.push(`-D${options.displayId + 1}`);
+  args.push(capturePath);
+
+  // macOS-only app: call the system capture tool directly. The previous
+  // dependency also ran system_profiler and created one file per preceding
+  // display on every frame.
+  await rm(capturePath, { force: true });
+  try {
+    await execFileAsync("/usr/sbin/screencapture", args, { timeout: 10_000 });
+    const raw = await readFile(capturePath);
+    if (raw.length === 0) throw new Error("Screen capture returned no image");
+    return raw;
+  } finally {
+    await rm(capturePath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function grabFrame(options: CaptureOptions): Promise<Buffer> {
+  const raw = await grabRawFrame(options);
+
+  // Load once, on the first viewer. A broken sharp install therefore does not
+  // prevent the lightweight control plane from keeping the Mac online.
+  const sharp = await loadSharp();
 
   let pipeline = sharp(raw);
   const meta = await pipeline.metadata();
   const width = meta.width ?? 0;
   const height = meta.height ?? 0;
 
-  if (options.scale > 0 && options.scale < 1 && width > 0 && height > 0) {
-    pipeline = pipeline.resize(
-      Math.max(1, Math.round(width * options.scale)),
-      Math.max(1, Math.round(height * options.scale)),
-      { fit: "inside" },
+  if (width > 0 && height > 0) {
+    const scaledWidth = Math.round(width * options.scale);
+    const outputWidth = Math.max(
+      1,
+      Math.min(width, scaledWidth, options.maxWidth),
     );
+    if (outputWidth < width) {
+      pipeline = pipeline.resize({
+        width: outputWidth,
+        fit: "inside",
+        withoutEnlargement: true,
+      });
+    }
   }
 
   return pipeline
-    .jpeg({ quality: options.jpegQuality, mozjpeg: true })
+    // mozjpeg is designed for maximum offline compression and is needlessly
+    // CPU-heavy for transient live frames. libjpeg-turbo is substantially
+    // faster and the tunnel already transports compressed bytes.
+    .jpeg({ quality: options.jpegQuality })
     .toBuffer();
 }
 
 export function createCapture(options: CaptureOptions): CaptureController {
   const intervalMs = Math.max(50, Math.round(1000 / options.fps));
-  const wakeGapMs = options.wakeGapMs ?? 5000;
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
   let busy = false;
-  let lastTick = Date.now();
-  let recovering = false;
   let consecutiveErrors = 0;
 
-  async function recoverFromWake(): Promise<void> {
-    if (recovering) return;
-    recovering = true;
-    console.log("[capture] wake/suspend gap detected; recovering");
-    try {
-      if (options.onWake) await options.onWake();
-      await grabFrame(options);
-    } catch (err) {
-      console.error("[capture] wake recovery failed:", err);
-    } finally {
-      recovering = false;
-    }
-  }
-
   async function tick(): Promise<void> {
-    if (!running || busy) return;
+    if (!running) return;
+    if (busy) {
+      timer = setTimeout(() => void tick(), 50);
+      return;
+    }
     busy = true;
-    const now = Date.now();
-    const gap = now - lastTick;
-    lastTick = now;
 
     try {
-      if (gap > wakeGapMs) {
-        await recoverFromWake();
-      }
       const jpeg = await grabFrame(options);
       consecutiveErrors = 0;
       if (running) options.onFrame(jpeg);
@@ -111,10 +144,20 @@ export function createCapture(options: CaptureOptions): CaptureController {
   }
 
   return {
+    async preflight() {
+      if (running || busy) {
+        throw new Error("Screen capture is already in use");
+      }
+      busy = true;
+      try {
+        await grabRawFrame(options);
+      } finally {
+        busy = false;
+      }
+    },
     start() {
       if (running) return;
       running = true;
-      lastTick = Date.now();
       void tick();
     },
     stop() {
@@ -124,16 +167,14 @@ export function createCapture(options: CaptureOptions): CaptureController {
         timer = null;
       }
     },
-    async reinit() {
-      await recoverFromWake();
-    },
   };
 }
 
-export function loadCaptureEnv(): Omit<CaptureOptions, "onFrame" | "onWake"> {
+export function loadCaptureEnv(): Omit<CaptureOptions, "onFrame"> {
   const fps = Number(process.env.FPS ?? "8");
   const jpegQuality = Number(process.env.JPEG_QUALITY ?? "60");
   const scale = Number(process.env.SCALE ?? "0.5");
+  const maxWidth = Number(process.env.MAX_WIDTH ?? "1920");
   const displayRaw = process.env.DISPLAY_ID;
   const displayId =
     displayRaw === undefined || displayRaw === ""
@@ -147,10 +188,15 @@ export function loadCaptureEnv(): Omit<CaptureOptions, "onFrame" | "onWake"> {
         ? jpegQuality
         : 60,
     scale: Number.isFinite(scale) && scale > 0 && scale <= 1 ? scale : 0.5,
+    maxWidth:
+      Number.isFinite(maxWidth) && maxWidth >= 320 && maxWidth <= 7680
+        ? Math.round(maxWidth)
+        : 1920,
     displayId:
-      displayId !== undefined && Number.isFinite(displayId)
+      displayId !== undefined &&
+      Number.isInteger(displayId) &&
+      displayId >= 0
         ? displayId
         : undefined,
-    wakeGapMs: 5000,
   };
 }
