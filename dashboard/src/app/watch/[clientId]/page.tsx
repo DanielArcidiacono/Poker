@@ -3,35 +3,21 @@ import { hasDashboardSession } from "@/lib/auth";
 import { normalizeClientId } from "@/lib/client-id";
 import { getStore } from "@/lib/store";
 import { normalizeStreamUrl } from "@/lib/stream-url";
+import { watchGenerationKey } from "@/lib/watch-generation";
+import { WatchBridge } from "@/components/WatchBridge";
 import { WatchWait } from "@/components/WatchWait";
 
 export const dynamic = "force-dynamic";
 
 type Props = {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; ready?: string }>;
 };
-
-async function streamIsReachable(publicUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(
-      `${publicUrl.replace(/\/$/, "")}/api/health`,
-      {
-        cache: "no-store",
-        redirect: "manual",
-        signal: AbortSignal.timeout(4_000),
-      },
-    );
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
 
 export default async function WatchRoute({ params, searchParams }: Props) {
   const clientId = normalizeClientId((await params).clientId);
   if (!clientId) notFound();
-  const [{ error }, authed] = await Promise.all([
+  const [{ error, ready }, authed] = await Promise.all([
     searchParams,
     hasDashboardSession(),
   ]);
@@ -62,32 +48,29 @@ export default async function WatchRoute({ params, searchParams }: Props) {
   const store = getStore();
   const session = await store.getSession(clientId);
   const publicUrl = normalizeStreamUrl(session.publicUrl);
-  const tunnelAgeMs = session.publicUrlUpdatedAt
-    ? Date.now() - session.publicUrlUpdatedAt
-    : Number.POSITIVE_INFINITY;
-  const tunnelIsSettling = tunnelAgeMs < 20_000;
-
   if (
     session.online &&
     session.desiredSharing &&
     session.recording &&
     publicUrl &&
-    session.watchToken &&
-    (await streamIsReachable(publicUrl))
+    session.watchToken
   ) {
-    const latest = await store.getSession(clientId);
-    if (
-      latest.online &&
-      latest.desiredSharing &&
-      latest.sharingRevision === session.sharingRevision &&
-      latest.recording &&
-      latest.publicUrl === session.publicUrl &&
-      latest.watchToken === session.watchToken
-    ) {
+    const generation = watchGenerationKey(publicUrl, session.watchToken);
+    if (ready === generation) {
       redirect(
         `${publicUrl}/embed?token=${encodeURIComponent(session.watchToken)}`,
       );
     }
+    return (
+      <main className="shell">
+        <WatchBridge
+          publicUrl={publicUrl}
+          readyPath={`${watchPath}?ready=${encodeURIComponent(generation)}`}
+          sessionName={session.hostname || "Prostar"}
+          watchPath={watchPath}
+        />
+      </main>
+    );
   }
 
   const hasStaleStream = Boolean(
@@ -95,11 +78,9 @@ export default async function WatchRoute({ params, searchParams }: Props) {
   );
   const detail = !session.online
     ? "This Prostar session is offline."
-    : tunnelIsSettling
-      ? "The private link is ready. Waiting briefly for DNS…"
-      : hasStaleStream
-        ? "The previous private link expired. Restart it from the dashboard."
-        : session.message || "Waiting for Prostar to publish the stream…";
+    : hasStaleStream
+      ? "The previous private link expired. Restart it from the dashboard."
+      : session.message || "Waiting for Prostar to publish the stream…";
 
   return (
     <main className="shell">

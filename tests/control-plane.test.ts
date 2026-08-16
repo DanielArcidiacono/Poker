@@ -1,6 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { startControlPlane } from "../src/control-plane.js";
+import {
+  resolveMacDisplayName,
+  startControlPlane,
+} from "../src/control-plane.js";
+
+test("Mac display name prefers stable System Configuration names", () => {
+  assert.equal(
+    resolveMacDisplayName(
+      (preference) =>
+        preference === "ComputerName" ? "  Studio Mac  \n" : "ignored",
+      () => "mac.localdomain",
+    ),
+    "Studio Mac",
+  );
+  assert.equal(
+    resolveMacDisplayName(
+      (preference) => {
+        if (preference === "ComputerName") throw new Error("unset");
+        return "prostar-mac\n";
+      },
+      () => "mac.localdomain",
+    ),
+    "prostar-mac",
+  );
+  assert.equal(
+    resolveMacDisplayName(
+      () => {
+        throw new Error("unavailable");
+      },
+      () => "mac.localdomain",
+    ),
+    "mac.localdomain",
+  );
+});
 
 async function waitFor(condition: () => boolean, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
@@ -82,6 +115,7 @@ test("desired state stops sharing and failed live status is retried", async () =
     await waitFor(
       () => statusBodies.filter((body) => body.recording).length >= 2,
     );
+    assert.equal(handle.isConnected(), true);
     assert.equal(failedLiveStatus, true);
     assert.ok(watchToken);
     handle.setViewerCount(2);
@@ -164,6 +198,7 @@ test("sharing fails closed when the dashboard lease can no longer be renewed", a
     await waitFor(() => becameLive && Boolean(watchToken));
     dashboardReachable = false;
     await waitFor(() => !running && watchToken === null, 500);
+    assert.equal(handle.isConnected(), false);
   } finally {
     await handle.stop();
     globalThis.fetch = originalFetch;

@@ -12,8 +12,14 @@ test("a scoped credential cannot claim another Prostar session", async () => {
   const firstSecret = "first-prostar-secret-000000000000";
   const secondSecret = "second-prostar-secret-00000000000";
   const store = getStore();
-  await store.enrollSession(firstClient, hashAgentCredential(firstSecret));
-  await store.enrollSession(secondClient, hashAgentCredential(secondSecret));
+  await store.enrollSession(
+    firstClient,
+    hashAgentCredential(firstSecret),
+  );
+  await store.enrollSession(
+    secondClient,
+    hashAgentCredential(secondSecret),
+  );
 
   assert.equal(
     await checkScopedAgentBearer(`Bearer ${secondSecret}`, firstClient),

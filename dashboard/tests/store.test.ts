@@ -36,8 +36,14 @@ test("sessions own independent leases, desired state, and streams", async () => 
 
   try {
     const store = getStore();
-    assert.equal(await store.enrollSession(firstClient, "hash-one"), true);
-    assert.equal(await store.enrollSession(secondClient, "hash-two"), true);
+    assert.equal(
+      await store.enrollSession(firstClient, "hash-one"),
+      true,
+    );
+    assert.equal(
+      await store.enrollSession(secondClient, "hash-two"),
+      true,
+    );
     assert.equal(
       await store.verifySessionCredential(firstClient, "hash-one"),
       true,
@@ -143,6 +149,48 @@ test("accepts Vercel marketplace and standard KV Redis variables", () => {
       /KV_REST_API_URL and KV_REST_API_TOKEN must be configured together/,
     );
   } finally {
+    restoreEnvironment();
+  }
+});
+
+test("provisional credentials expire unless setup explicitly activates them", async () => {
+  const restoreEnvironment = preserveEnvironment(REDIS_ENVIRONMENT_NAMES);
+  clearEnvironment(REDIS_ENVIRONMENT_NAMES);
+  const originalNow = Date.now;
+  let now = 1_000_000;
+  Date.now = () => now;
+
+  try {
+    const store = getStore();
+    const expiringClient = "33333333-3333-4333-8333-333333333333";
+    const activeClient = "44444444-4444-4444-8444-444444444444";
+    assert.equal(
+      await store.enrollSession(expiringClient, "expiring"),
+      true,
+    );
+    assert.equal(
+      await store.enrollSession(activeClient, "durable"),
+      true,
+    );
+    assert.equal(
+      await store.activateSessionCredential(
+        activeClient,
+        "durable",
+      ),
+      true,
+    );
+
+    now += 60 * 60_000 + 1;
+    assert.equal(
+      await store.verifySessionCredential(expiringClient, "expiring"),
+      false,
+    );
+    assert.equal(
+      await store.verifySessionCredential(activeClient, "durable"),
+      true,
+    );
+  } finally {
+    Date.now = originalNow;
     restoreEnvironment();
   }
 });

@@ -49,6 +49,8 @@
       <string>__PROSTAR_CLIENT_ID__</string>
       <key>PROSTAR_AGENT_SECRET</key>
       <string>__PROSTAR_AGENT_SECRET__</string>
+      <key>PROSTAR_CLOUDFLARED_BIN</key>
+      <string>__PROSTAR_CLOUDFLARED_BIN__</string>
     </dict>
   </dict>
 </plist>

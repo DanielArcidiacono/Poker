@@ -24,6 +24,7 @@ const publicDir = join(__dirname, "..", "public");
 const port = Number(process.env.PORT ?? "8787");
 
 const password = getPassword();
+const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
 
 const app = express();
 app.disable("x-powered-by");
@@ -166,7 +167,6 @@ const capture = createCapture({
   onFrame: broadcast,
 });
 
-const controlPlaneUrl = process.env.CONTROL_PLANE_URL?.trim();
 const agentToken =
   process.env.PROSTAR_AGENT_SECRET?.trim() ||
   process.env.AGENT_TOKEN?.trim();
@@ -214,6 +214,23 @@ const controlPlane =
         },
       })
     : null;
+
+app.get("/api/control-plane/health", (req, res) => {
+  const authorization = req.get("authorization") ?? "";
+  const provided = authorization.startsWith("Bearer ")
+    ? authorization.slice("Bearer ".length).trim()
+    : "";
+  if (!agentToken || !provided || !passwordsMatch(provided, agentToken)) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  if (!controlPlane?.isConnected()) {
+    res.status(503).json({ error: "Dashboard pairing is not ready" });
+    return;
+  }
+  res.status(204).end();
+});
 
 if (controlPlaneUrl && !agentToken) {
   console.warn(

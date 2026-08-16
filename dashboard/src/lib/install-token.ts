@@ -11,9 +11,18 @@ function signature(expiresAt: string, clientId: string): string {
 }
 
 export function createInstallToken(now = Date.now()): string {
-  const expiresAt = String(Math.floor(now / 1000) + TOKEN_TTL_SECONDS);
   const clientId = randomUUID();
-  return `${expiresAt}.${clientId}.${signature(expiresAt, clientId)}`;
+  return createInstallTokenForClient(clientId, now);
+}
+
+function createInstallTokenForClient(
+  clientId: string,
+  now = Date.now(),
+): string {
+  const normalized = normalizeClientId(clientId);
+  if (!normalized) throw new Error("invalid Prostar client id");
+  const expiresAt = String(Math.floor(now / 1000) + TOKEN_TTL_SECONDS);
+  return `${expiresAt}.${normalized}.${signature(expiresAt, normalized)}`;
 }
 
 export function parseInstallToken(
@@ -48,10 +57,4 @@ export function isValidInstallToken(
   now = Date.now(),
 ): boolean {
   return parseInstallToken(token, now) !== null;
-}
-
-export function deriveAgentCredential(clientId: string): string {
-  return createHmac("sha256", getAgentToken())
-    .update(`prostar-agent:${clientId}`)
-    .digest("base64url");
 }

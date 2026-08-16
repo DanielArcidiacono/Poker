@@ -149,22 +149,27 @@ if [[ ! -f "$ROOT/.env" ]]; then
   exit 1
 fi
 
-if ! NODE_BIN="$(command -v node)"; then
-  echo "node not found on PATH" >&2
+if [[ ! -x "$ROOT/scripts/ensure-runtime.sh" ]]; then
+  echo "Missing Prostar runtime installer at $ROOT/scripts/ensure-runtime.sh" >&2
   exit 1
 fi
-if ! "$NODE_BIN" -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 9) ? 0 : 1)'; then
-  echo "Node.js 20.9 or later is required (found $("$NODE_BIN" -v))." >&2
-  echo "Install the current LTS release from https://nodejs.org and try again." >&2
+PROSTAR_APP_ROOT="$APP_ROOT" /bin/bash "$ROOT/scripts/ensure-runtime.sh" --node-only
+export PATH="$APP_ROOT/runtime/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export npm_config_cache="$APP_ROOT/runtime/npm-cache"
+export npm_config_update_notifier=false
+mkdir -p "$npm_config_cache"
+NODE_BIN="$APP_ROOT/runtime/bin/node"
+[[ -x "$NODE_BIN" ]] || {
+  echo "Prostar's private Node.js runtime is unavailable." >&2
   exit 1
-fi
+}
 
 # Compile once at install time. The background process runs plain JavaScript,
 # not the heavier TypeScript development loader.
 TSC_BIN="$ROOT/node_modules/.bin/tsc"
 if [[ ! -x "$TSC_BIN" ]]; then
   say "Installing dependencies…"
-  (cd "$ROOT" && npm ci --foreground-scripts --no-audit --no-fund)
+  (cd "$ROOT" && "$APP_ROOT/runtime/bin/npm" ci --foreground-scripts --no-audit --no-fund)
 fi
 if [[ ! -x "$TSC_BIN" ]]; then
   echo "TypeScript compiler not found at $TSC_BIN after npm ci" >&2
@@ -249,7 +254,7 @@ say "It will restart automatically after login and if the agent exits."
 say "Waiting for local health…"
 HEALTHY=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-  if curl -fsS "http://127.0.0.1:${PORT_VAL}/api/health" >/dev/null 2>&1; then
+  if /usr/bin/curl -qfsS "http://127.0.0.1:${PORT_VAL}/api/health" >/dev/null 2>&1; then
     say "Local agent is responding on port ${PORT_VAL}"
     HEALTHY=1
     break
@@ -291,5 +296,5 @@ HANDOFF_ACTIVE=0
 
 say "Logs: $LOG_DIR/prostar.*.log"
 say "Local URL: http://127.0.0.1:${PORT_VAL}"
-say "Grant Screen Recording to Prostar's Node helper if prompted: $NODE_BIN"
+say "Grant Screen Recording to Prostar's capture helper if prompted."
 say "System Settings → Privacy & Security → Screen Recording"

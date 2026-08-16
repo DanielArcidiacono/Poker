@@ -37,6 +37,9 @@ test("LaunchAgent renderer treats env values as XML data", async () => {
     const output = await readFile(destination, "utf8");
     assert.match(output, /alpha&amp;bravo\|&lt;charlie&gt;&quot;&apos;/);
     assert.match(output, /token&amp;with\|xml&lt;characters&gt;/);
+    assert.match(output, /PROSTAR_CLOUDFLARED_BIN/);
+    assert.match(output, /\/path\/with &amp;\/cloudflared/);
+    assert.doesNotMatch(output, /homebrew/);
     assert.equal(output.includes("__PROSTAR_VIEWER_PASSWORD__"), false);
     assert.equal((await stat(destination)).mode & 0o777, 0o600);
   } finally {

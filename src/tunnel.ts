@@ -1,6 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { networkInterfaces } from "node:os";
 
+function cloudflaredExecutable(): string {
+  return process.env.PROSTAR_CLOUDFLARED_BIN?.trim() || "cloudflared";
+}
+
 const QUICK_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 
 export type TunnelMode = "idle" | "quick";
@@ -92,7 +96,7 @@ export function createTunnelManager(port: string | number): TunnelManager {
     mode = "quick";
     logTail = "";
     console.log("[tunnel] starting cloudflared (quick)");
-    const proc = spawn("cloudflared", quickTunnelArgs(portStr), {
+    const proc = spawn(cloudflaredExecutable(), quickTunnelArgs(portStr), {
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
     });
@@ -107,7 +111,7 @@ export function createTunnelManager(port: string | number): TunnelManager {
       console.error("[tunnel] failed to start cloudflared:", err.message);
       rejectWaiters(
         new Error(
-          "Could not start cloudflared. Install it with: brew install cloudflared",
+          "Could not start Prostar's private cloudflared runtime",
         ),
       );
       child = null;
@@ -209,7 +213,7 @@ export function createTunnelManager(port: string | number): TunnelManager {
 export function runQuickTunnelCli(): void {
   const port = process.env.PORT ?? "8787";
   const child = spawn(
-    "cloudflared",
+    cloudflaredExecutable(),
     ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`],
     { stdio: "inherit", env: process.env },
   );

@@ -65,11 +65,9 @@ export function InstallClient({
           <a href={dashboardUrl}>{dashboardUrl}</a>
         </p>
         <p className="muted" style={{ marginTop: 12 }}>
-          Needs <strong>Node.js 20.9+</strong> (
-          <a href="https://nodejs.org" target="_blank" rel="noreferrer">
-            nodejs.org
-          </a>
-          ). Select the command, <strong>Cmd+C</strong>, paste in Terminal.
+          Requires <strong>macOS 15 or later</strong>. Prostar installs its own
+          private runtime—no Homebrew, Node.js, or developer tools are needed.
+          Select the command, <strong>Cmd+C</strong>, then paste it in Terminal.
         </p>
 
         <textarea
@@ -124,7 +122,8 @@ export function InstallClient({
         </ol>
         <p className="muted" style={{ marginTop: 14 }}>
           Production setup stays quiet and prints only its final result. Run
-          <code> prostar-admin </code> on the Mac for status, controls, or logs.
+          the dashboard for sharing controls; local diagnostics remain under
+          Prostar&apos;s Application Support folder.
         </p>
       </div>
     </main>

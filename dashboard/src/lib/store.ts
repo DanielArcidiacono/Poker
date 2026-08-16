@@ -58,6 +58,7 @@ type StoredStatus = {
 
 type MemorySession = StoredStatus & {
   credentialHash: string | null;
+  credentialExpiresAt: number | null;
   lastSeen: number | null;
   desiredSharing: boolean;
   sharingRevision: string;
@@ -66,6 +67,10 @@ type MemorySession = StoredStatus & {
 
 export type Store = {
   enrollSession: (
+    clientId: string,
+    credentialHash: string,
+  ) => Promise<boolean>;
+  activateSessionCredential: (
     clientId: string,
     credentialHash: string,
   ) => Promise<boolean>;
@@ -99,11 +104,18 @@ export type Store = {
     message: string,
   ) => Promise<string>;
   setStatus: (clientId: string, status: StatusPayload) => Promise<boolean>;
+  deleteSession: (
+    clientId: string,
+    credentialHash: string,
+  ) => Promise<"deleted" | "absent" | "mismatch">;
 };
 
 /** Agents can spend tens of seconds starting a tunnel without looking dead. */
 export const HEARTBEAT_TTL_MS = 70_000;
 const AGENT_LEASE_TTL_MS = 90_000;
+// Clean Macs download both private runtimes and npm dependencies before the
+// credential is activated. An abandoned setup still self-revokes.
+const ENROLLMENT_TTL_MS = 60 * 60_000;
 const PRODUCT_NAME = "Prostar";
 const SESSION_INDEX = "prostar:sessions";
 const REDIS_ENVIRONMENT_PAIRS = [
@@ -134,6 +146,7 @@ function emptyMemorySession(): MemorySession {
   return {
     ...emptyStatus(),
     credentialHash: null,
+    credentialExpiresAt: null,
     lastSeen: null,
     desiredSharing: false,
     sharingRevision: "0",
@@ -305,18 +318,42 @@ function createMemoryStore(): Store {
     async enrollSession(clientId, credentialHash) {
       const session = memorySession(clientId);
       if (
-        session.credentialHash &&
+        session.credentialExpiresAt !== null &&
+        session.credentialExpiresAt <= Date.now()
+      ) {
+        session.credentialHash = null;
+        session.credentialExpiresAt = null;
+      }
+      // Enrollment is deliberately create-only. Two executions of the same
+      // setup command generate different local secrets, while a retry of one
+      // ambiguous request can safely confirm ownership with the same hash.
+      if (session.credentialHash) {
+        return credentialsMatch(session.credentialHash, credentialHash);
+      }
+      session.credentialHash = credentialHash;
+      session.credentialExpiresAt = Date.now() + ENROLLMENT_TTL_MS;
+      return true;
+    },
+    async activateSessionCredential(clientId, credentialHash) {
+      const session = memorySessions().get(clientId);
+      if (
+        !session ||
+        (session.credentialExpiresAt !== null &&
+          session.credentialExpiresAt <= Date.now()) ||
         !credentialsMatch(session.credentialHash, credentialHash)
       ) {
         return false;
       }
-      session.credentialHash = credentialHash;
+      session.credentialExpiresAt = null;
       return true;
     },
     async verifySessionCredential(clientId, credentialHash) {
-      return credentialsMatch(
-        memorySessions().get(clientId)?.credentialHash ?? null,
-        credentialHash,
+      const session = memorySessions().get(clientId);
+      return Boolean(
+        session &&
+          (session.credentialExpiresAt === null ||
+            session.credentialExpiresAt > Date.now()) &&
+          credentialsMatch(session.credentialHash, credentialHash),
       );
     },
     async claimAgent(clientId, instanceId) {
@@ -422,6 +459,29 @@ function createMemoryStore(): Store {
       session.lastSeen = Date.now();
       return true;
     },
+    async deleteSession(clientId, credentialHash) {
+      const session = memorySessions().get(clientId);
+      if (
+        !session ||
+        !session.credentialHash ||
+        (session.credentialExpiresAt !== null &&
+          session.credentialExpiresAt <= Date.now())
+      ) {
+        memorySessions().delete(clientId);
+        for (const [instanceId, owner] of memoryInstanceClients()) {
+          if (owner === clientId) memoryInstanceClients().delete(instanceId);
+        }
+        return "absent";
+      }
+      if (!credentialsMatch(session.credentialHash, credentialHash)) {
+        return "mismatch";
+      }
+      memorySessions().delete(clientId);
+      for (const [instanceId, owner] of memoryInstanceClients()) {
+        if (owner === clientId) memoryInstanceClients().delete(instanceId);
+      }
+      return "deleted";
+    },
   };
 }
 
@@ -453,12 +513,32 @@ function createRedisStore(redis: Redis): Store {
 
   return {
     async enrollSession(clientId, credentialHash) {
-      const key = sessionKeys(clientId).credential;
-      const stored = await redis.get<string>(key);
-      if (stored) return credentialsMatch(stored, credentialHash);
-      const result = await redis.set(key, credentialHash, { nx: true });
-      if (result === "OK") return true;
-      return credentialsMatch(await redis.get<string>(key), credentialHash);
+      const keys = sessionKeys(clientId);
+      const enrolled = await redis.eval<[string, string], number>(
+        `local current = redis.call("get", KEYS[1])
+if current then
+  if current == ARGV[1] then return 1 end
+  return 0
+end
+redis.call("psetex", KEYS[1], ARGV[2], ARGV[1])
+return 1`,
+        [keys.credential],
+        [credentialHash, String(ENROLLMENT_TTL_MS)],
+      );
+      return enrolled === 1;
+    },
+    async activateSessionCredential(clientId, credentialHash) {
+      const keys = sessionKeys(clientId);
+      const activated = await redis.eval<[string], number>(
+        `if redis.call("get", KEYS[1]) == ARGV[1] then
+  redis.call("persist", KEYS[1])
+  return 1
+end
+return 0`,
+        [keys.credential],
+        [credentialHash],
+      );
+      return activated === 1;
     },
     async verifySessionCredential(clientId, credentialHash) {
       return credentialsMatch(
@@ -666,6 +746,36 @@ return 0`,
       pipeline.zadd(SESSION_INDEX, { score: now, member: clientId });
       await pipeline.exec();
       return true;
+    },
+    async deleteSession(clientId, credentialHash) {
+      const keys = sessionKeys(clientId);
+      const deleted = await redis.eval<
+        [string, string, string],
+        number
+      >(
+        `local current = redis.call("get", KEYS[1])
+if current and current ~= ARGV[1] then return 0 end
+local instance = redis.call("get", KEYS[5])
+redis.call("del", KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5])
+redis.call("zrem", KEYS[6], ARGV[2])
+if instance then redis.call("del", ARGV[3] .. instance) end
+if current then return 1 end
+return 2`,
+        [
+          keys.credential,
+          keys.heartbeat,
+          keys.status,
+          keys.desired,
+          keys.lease,
+          SESSION_INDEX,
+        ],
+        [credentialHash, clientId, "prostar:instance:"],
+      );
+      return deleted === 1
+        ? "deleted"
+        : deleted === 2
+          ? "absent"
+          : "mismatch";
     },
   };
 }

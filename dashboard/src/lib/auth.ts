@@ -65,16 +65,21 @@ export async function checkScopedAgentBearer(
   header: string | null,
   clientId: string,
 ): Promise<boolean> {
-  const provided = bearerValue(header);
-  if (!provided) return false;
-  return getStore().verifySessionCredential(
-    clientId,
-    credentialHash(provided),
-  );
+  const hash = scopedAgentCredentialHash(header);
+  return hash
+    ? getStore().verifySessionCredential(clientId, hash)
+    : false;
 }
 
 export function hashAgentCredential(value: string): string {
   return credentialHash(value);
+}
+
+export function scopedAgentCredentialHash(
+  header: string | null,
+): string | null {
+  const provided = bearerValue(header);
+  return provided ? credentialHash(provided) : null;
 }
 
 export function isSameOriginRequest(req: Request): boolean {

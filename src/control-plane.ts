@@ -1,8 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { hostname as osHostname } from "node:os";
 
 export type ControlPlaneHandle = {
   setViewerCount: (count: number) => void;
+  isConnected: () => boolean;
   stop: () => Promise<void>;
 };
 
@@ -39,7 +41,32 @@ const LIVE_STATUS_REPUBLISH_MS = 60_000;
 const CONTROL_PLANE_DISCONNECT_GRACE_MS = 60_000;
 const MAX_START_RETRY_MS = 60_000;
 const PRODUCT_NAME = "Prostar";
-const AGENT_VERSION = "1.0.0";
+const AGENT_VERSION = "1.1.0";
+
+type MacNameReader = (preference: "ComputerName" | "LocalHostName") => string;
+
+function readMacName(preference: "ComputerName" | "LocalHostName"): string {
+  return execFileSync("/usr/sbin/scutil", ["--get", preference], {
+    encoding: "utf8",
+    timeout: 1_000,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+
+export function resolveMacDisplayName(
+  reader: MacNameReader = readMacName,
+  hostname: () => string = osHostname,
+): string {
+  for (const preference of ["ComputerName", "LocalHostName"] as const) {
+    try {
+      const value = reader(preference).trim();
+      if (value) return value;
+    } catch {
+      // A preference can be unset; continue to the next stable system name.
+    }
+  }
+  return hostname().trim() || "Mac";
+}
 
 async function postJson(
   url: string,
@@ -63,7 +90,7 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
   const disconnectGraceMs =
     options.disconnectGraceMs ?? CONTROL_PLANE_DISCONNECT_GRACE_MS;
   const retryBaseMs = options.retryBaseMs ?? 5_000;
-  const host = osHostname();
+  const host = resolveMacDisplayName();
   const instanceId = randomUUID();
   const base = options.baseUrl.replace(/\/$/, "");
   let stopped = false;
@@ -83,7 +110,7 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
   let statusDirty = false;
   let lastStatusReportAt = 0;
   let statusPublishInFlight: Promise<boolean> | null = null;
-  let lastSuccessfulOwnerPollAt = Date.now();
+  let lastSuccessfulOwnerPollAt = 0;
   let startFailureCount = 0;
   let nextStartAttemptAt = 0;
 
@@ -338,6 +365,14 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
   void tick();
 
   return {
+    isConnected() {
+      const freshnessWindow = Math.max(15_000, pollMs * 3);
+      return (
+        ownsLease &&
+        lastSuccessfulOwnerPollAt > 0 &&
+        Date.now() - lastSuccessfulOwnerPollAt <= freshnessWindow
+      );
+    },
     setViewerCount(count) {
       const viewerCount = Math.max(0, Math.floor(count));
       if (currentStatus.viewerCount === viewerCount) return;

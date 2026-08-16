@@ -5,7 +5,7 @@ umask 077
 # Public, local-only installer. Dashboard pairing uses its own expiring setup
 # command, which supplies scoped credentials and enables remote sharing.
 REPOSITORY="${PROSTAR_GITHUB_REPOSITORY:-DanielArcidiacono/Poker}"
-REF="${PROSTAR_REF:-v1.0.0}"
+REF="${PROSTAR_REF:-v1.1.0}"
 APP_ROOT="$HOME/Library/Application Support/Prostar"
 CURRENT_PATH="$APP_ROOT/current"
 ADMIN_LINK="$HOME/.local/bin/prostar-admin"
@@ -86,35 +86,11 @@ for link in "$ADMIN_LINK" "$ADMIN_FALLBACK_LINK"; do
   fi
 done
 
-export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
-node_supported() {
-  command -v node >/dev/null 2>&1 &&
-    node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 20 || (major === 20 && minor >= 9) ? 0 : 1)'
-}
-
-if ! node_supported; then
-  if command -v brew >/dev/null 2>&1; then
-    brew install node
-    hash -r
-  else
-    die "Node.js 20.9+ is required. Install the current LTS release from https://nodejs.org and retry."
-  fi
-fi
-node_supported || die "Node.js 20.9+ is required (found $(node -v 2>/dev/null || printf 'none'))."
-command -v npm >/dev/null 2>&1 || die "npm is required and normally ships with Node.js."
-
-VIEWER_PASSWORD="${PROSTAR_VIEWER_PASSWORD:-}"
-if [[ -z "$VIEWER_PASSWORD" ]]; then
-  VIEWER_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
-fi
-[[ "$VIEWER_PASSWORD" =~ ^[A-Za-z0-9_-]{12,128}$ ]] || die "PROSTAR_VIEWER_PASSWORD must be 12–128 URL-safe characters."
-AGENT_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
-
 mkdir -p "$APP_ROOT/releases"
 STAGING="$(mktemp -d -t prostar-bootstrap.XXXXXX)"
 ARCHIVE="$STAGING/prostar.tgz"
 ARCHIVE_URL="https://codeload.github.com/$REPOSITORY/tar.gz/$REF"
-curl --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -fsSL "$ARCHIVE_URL" -o "$ARCHIVE"
+/usr/bin/curl -q --proto '=https' --tlsv1.2 --retry 3 --retry-all-errors -fsSL "$ARCHIVE_URL" -o "$ARCHIVE"
 
 RELEASE_PATH="$APP_ROOT/releases/$(date +%Y%m%d%H%M%S)-$$"
 mkdir "$RELEASE_PATH"
@@ -122,11 +98,25 @@ tar -xzf "$ARCHIVE" --strip-components=1 -C "$RELEASE_PATH"
 if [[ ! -f "$RELEASE_PATH/package-lock.json" || \
       ! -f "$RELEASE_PATH/src/server.ts" || \
       ! -f "$RELEASE_PATH/scripts/install-agent.sh" || \
-      ! -f "$RELEASE_PATH/scripts/prostar-admin.sh" ]]; then
+      ! -f "$RELEASE_PATH/scripts/prostar-admin.sh" || \
+      ! -x "$RELEASE_PATH/scripts/ensure-runtime.sh" ]]; then
   die "The downloaded Prostar archive is incomplete."
 fi
 rm -rf "$STAGING"
 STAGING=""
+
+PROSTAR_APP_ROOT="$APP_ROOT" /bin/bash "$RELEASE_PATH/scripts/ensure-runtime.sh" --node-only
+export PATH="$APP_ROOT/runtime/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export npm_config_cache="$APP_ROOT/runtime/npm-cache"
+export npm_config_update_notifier=false
+mkdir -p "$npm_config_cache"
+
+VIEWER_PASSWORD="${PROSTAR_VIEWER_PASSWORD:-}"
+if [[ -z "$VIEWER_PASSWORD" ]]; then
+  VIEWER_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
+fi
+[[ "$VIEWER_PASSWORD" =~ ^[A-Za-z0-9_-]{12,128}$ ]] || die "PROSTAR_VIEWER_PASSWORD must be 12–128 URL-safe characters."
+AGENT_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"
 
 {
   printf 'PROSTAR_VIEWER_PASSWORD=%s\n' "$VIEWER_PASSWORD"
@@ -147,7 +137,7 @@ HANDOFF_STARTED=1
 PROSTAR_ADMIN_VERBOSE=0 bash "$RELEASE_PATH/scripts/install-agent.sh"
 
 permission_ready() {
-  curl --max-time 20 -fsS -o /dev/null \
+  /usr/bin/curl -q --max-time 20 -fsS -o /dev/null \
     -X POST \
     -H "Authorization: Bearer $AGENT_SECRET" \
     "http://127.0.0.1:8787/api/capture/preflight"

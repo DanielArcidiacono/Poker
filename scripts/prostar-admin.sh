@@ -42,7 +42,7 @@ Commands:
   preflight    Test Screen Recording permission through the agent
   open         Open the local viewer in the default browser
   password     Print the local viewer password
-  uninstall    Remove the background service (keeps data and logs)
+  uninstall    Fully remove Prostar, its private runtime, data, and logs
   help         Show this help
 
 The fallback command is:
@@ -87,7 +87,7 @@ is_loaded() {
 }
 
 is_healthy() {
-  curl --max-time 2 -fsS "http://127.0.0.1:$(port_value)/api/health" >/dev/null 2>&1
+  /usr/bin/curl -q --max-time 2 -fsS "http://127.0.0.1:$(port_value)/api/health" >/dev/null 2>&1
 }
 
 wait_for_health() {
@@ -204,7 +204,7 @@ capture_preflight() {
   [[ -n "$secret" ]] || die "This release has no local agent credential."
   is_healthy || die "Prostar is not running. Run 'prostar-admin start' first."
   response_file="$(mktemp -t prostar-preflight.XXXXXX)"
-  status="$(curl --max-time 20 -sS -o "$response_file" -w '%{http_code}' \
+  status="$(/usr/bin/curl -q --max-time 20 -sS -o "$response_file" -w '%{http_code}' \
     -X POST \
     -H "Authorization: Bearer $secret" \
     "http://127.0.0.1:$(port_value)/api/capture/preflight" || true)"
@@ -241,8 +241,7 @@ show_password() {
 
 uninstall_service() {
   [[ -f "$ROOT/scripts/uninstall-agent.sh" ]] || die "Uninstaller is missing from $ROOT."
-  PROSTAR_ADMIN_VERBOSE=1 bash "$ROOT/scripts/uninstall-agent.sh"
-  printf 'Application data and logs were retained in %s and %s.\n' "$APP_ROOT" "$LOG_DIR"
+  PROSTAR_ADMIN_VERBOSE=1 bash "$ROOT/scripts/uninstall-agent.sh" --purge
 }
 
 command="${1:-help}"

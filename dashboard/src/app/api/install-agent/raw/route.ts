@@ -1,17 +1,16 @@
 import { NextResponse } from "next/server";
-import { buildInstallScript, resolveInstallConfig } from "@/lib/install-script";
 import {
-  deriveAgentCredential,
+  buildInstallScript,
+  resolveInstallConfig,
+} from "../../../../lib/install-script";
+import {
   parseInstallToken,
-} from "@/lib/install-token";
-import { hashAgentCredential } from "@/lib/auth";
-import { getStore } from "@/lib/store";
+} from "../../../../lib/install-token";
 
-/** Plain script for: curl -fsSL …/api/install-agent/raw | bash */
+/** Return the short-lived setup script downloaded to a temp file by the UI command. */
 export async function GET(req: Request) {
-  const claim = parseInstallToken(
-    new URL(req.url).searchParams.get("token"),
-  );
+  const installToken = new URL(req.url).searchParams.get("token");
+  const claim = parseInstallToken(installToken);
   if (!claim) {
     return NextResponse.json(
       { error: "This setup link is invalid or has expired." },
@@ -20,20 +19,9 @@ export async function GET(req: Request) {
   }
 
   try {
-    const agentCredential = deriveAgentCredential(claim.clientId);
-    const enrolled = await getStore().enrollSession(
-      claim.clientId,
-      hashAgentCredential(agentCredential),
-    );
-    if (!enrolled) {
-      return NextResponse.json(
-        { error: "This Prostar setup claim has already been replaced." },
-        { status: 409 },
-      );
-    }
     const cfg = resolveInstallConfig(req, {
       clientId: claim.clientId,
-      agentCredential,
+      installToken: installToken!,
     });
     const script = buildInstallScript(cfg);
     return new NextResponse(script, {

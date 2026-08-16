@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 const [
   root,
@@ -65,7 +66,7 @@ const values = {
   SERVER_ENTRY: serverEntry,
   PROJECT_ROOT: root,
   LOG_DIR: logDir,
-  PATH: `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${process.env.PATH ?? ""}`,
+  PATH: `${dirname(nodeBin)}:${root}/node_modules/.bin:/usr/bin:/bin:/usr/sbin:/sbin`,
   PROSTAR_VIEWER_PASSWORD: viewerPassword,
   PORT: env.PORT || "8787",
   FPS: env.FPS || "8",
@@ -76,6 +77,8 @@ const values = {
   CONTROL_PLANE_URL: env.CONTROL_PLANE_URL || "",
   PROSTAR_CLIENT_ID: env.PROSTAR_CLIENT_ID || "",
   PROSTAR_AGENT_SECRET: env.PROSTAR_AGENT_SECRET || env.AGENT_TOKEN || "",
+  PROSTAR_CLOUDFLARED_BIN:
+    env.PROSTAR_CLOUDFLARED_BIN || `${dirname(nodeBin)}/cloudflared`,
 };
 
 let output = readFileSync(plistSource, "utf8");
