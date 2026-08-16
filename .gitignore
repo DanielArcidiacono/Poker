@@ -7,3 +7,4 @@ launchd/*.generated.plist
 .prostar-install-pending
 .prostar-previous-agent.plist
 .prostar-previous-admin-links
+.vercel

@@ -2,11 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getStore } from "../src/lib/store";
 
+const REDIS_ENVIRONMENT_NAMES = [
+  "UPSTASH_REDIS_REST_URL",
+  "UPSTASH_REDIS_REST_TOKEN",
+  "UPSTASH_REDIS_REST_KV_REST_API_URL",
+  "UPSTASH_REDIS_REST_KV_REST_API_TOKEN",
+  "KV_REST_API_URL",
+  "KV_REST_API_TOKEN",
+] as const;
+
+function preserveEnvironment(names: readonly string[]): () => void {
+  const previous = new Map(names.map((name) => [name, process.env[name]]));
+  return () => {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  };
+}
+
+function clearEnvironment(names: readonly string[]): void {
+  for (const name of names) delete process.env[name];
+}
+
 test("sessions own independent leases, desired state, and streams", async () => {
-  const previousUrl = process.env.UPSTASH_REDIS_REST_URL;
-  const previousToken = process.env.UPSTASH_REDIS_REST_TOKEN;
-  delete process.env.UPSTASH_REDIS_REST_URL;
-  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  const restoreEnvironment = preserveEnvironment(REDIS_ENVIRONMENT_NAMES);
+  clearEnvironment(REDIS_ENVIRONMENT_NAMES);
 
   const firstClient = "11111111-1111-4111-8111-111111111111";
   const secondClient = "22222222-2222-4222-8222-222222222222";
@@ -91,9 +112,37 @@ test("sessions own independent leases, desired state, and streams", async () => 
     assert.equal(stopped.watchToken, null);
     assert.equal((await store.getSession(secondClient)).desiredSharing, false);
   } finally {
-    if (previousUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL;
-    else process.env.UPSTASH_REDIS_REST_URL = previousUrl;
-    if (previousToken === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN;
-    else process.env.UPSTASH_REDIS_REST_TOKEN = previousToken;
+    restoreEnvironment();
+  }
+});
+
+test("accepts Vercel marketplace and standard KV Redis variables", () => {
+  const environmentNames = [
+    ...REDIS_ENVIRONMENT_NAMES,
+    "NODE_ENV",
+    "PROSTAR_ALLOW_EPHEMERAL_STORE",
+  ] as const;
+  const restoreEnvironment = preserveEnvironment(environmentNames);
+  clearEnvironment(environmentNames);
+  Reflect.set(process.env, "NODE_ENV", "production");
+
+  try {
+    process.env.UPSTASH_REDIS_REST_KV_REST_API_URL =
+      "https://marketplace.example.upstash.io";
+    process.env.UPSTASH_REDIS_REST_KV_REST_API_TOKEN = "marketplace-token";
+    assert.doesNotThrow(() => getStore());
+
+    clearEnvironment(REDIS_ENVIRONMENT_NAMES);
+    process.env.KV_REST_API_URL = "https://kv.example.upstash.io";
+    process.env.KV_REST_API_TOKEN = "kv-token";
+    assert.doesNotThrow(() => getStore());
+
+    delete process.env.KV_REST_API_TOKEN;
+    assert.throws(
+      () => getStore(),
+      /KV_REST_API_URL and KV_REST_API_TOKEN must be configured together/,
+    );
+  } finally {
+    restoreEnvironment();
   }
 });

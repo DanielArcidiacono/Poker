@@ -31,9 +31,12 @@ Deploy with `dashboard` as the project root and configure:
   installer generation, and Watch.
 - `PROSTAR_ENROLLMENT_SECRET`: 32–256 URL-safe characters; signs enrollment
   claims and derives a separate scoped credential for each client.
-- `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`: required together in
-  production so enrollment, desired state, and session data survive process or
-  serverless restarts.
+- Redis credentials are required in production so enrollment, desired state,
+  and session data survive process or serverless restarts. Direct Upstash
+  configuration uses `UPSTASH_REDIS_REST_URL` and
+  `UPSTASH_REDIS_REST_TOKEN`. A Vercel Marketplace connection is detected
+  automatically through its generated `UPSTASH_REDIS_REST_KV_REST_API_URL`
+  and `UPSTASH_REDIS_REST_KV_REST_API_TOKEN` variables.
 - `NEXT_PUBLIC_APP_URL`: optional canonical dashboard origin.
 - `PROSTAR_BOOTSTRAP_VIEWER_PASSWORD`: optional 12–128 character URL-safe
   viewer password; otherwise each install receives a random password.
@@ -60,7 +63,10 @@ downloads its complete shell script to a temporary file and only then executes
 it; the file is removed when the command exits.
 
 For Vercel, use the included `vercel.json`, set the project root to `dashboard`,
-add the production variables above, and deploy normally.
+enable **Include source files outside of the Root Directory in the Build Step**,
+select Node.js 22.x, add the production variables above, and deploy normally.
+The outside-root setting is required because the dashboard build packages the
+Mac agent from root-level repository files.
 
 ## Production setup flow
 

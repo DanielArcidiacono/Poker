@@ -106,6 +106,14 @@ export const HEARTBEAT_TTL_MS = 70_000;
 const AGENT_LEASE_TTL_MS = 90_000;
 const PRODUCT_NAME = "Prostar";
 const SESSION_INDEX = "prostar:sessions";
+const REDIS_ENVIRONMENT_PAIRS = [
+  ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"],
+  [
+    "UPSTASH_REDIS_REST_KV_REST_API_URL",
+    "UPSTASH_REDIS_REST_KV_REST_API_TOKEN",
+  ],
+  ["KV_REST_API_URL", "KV_REST_API_TOKEN"],
+] as const;
 
 function emptyStatus(): StoredStatus {
   return {
@@ -663,12 +671,19 @@ return 0`,
 }
 
 export function getStore(): Store {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if ((url && !token) || (!url && token)) {
-    throw new Error(
-      "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN must be configured together",
-    );
+  let url: string | undefined;
+  let token: string | undefined;
+  for (const [urlName, tokenName] of REDIS_ENVIRONMENT_PAIRS) {
+    const candidateUrl = process.env[urlName];
+    const candidateToken = process.env[tokenName];
+    if ((candidateUrl && !candidateToken) || (!candidateUrl && candidateToken)) {
+      throw new Error(`${urlName} and ${tokenName} must be configured together`);
+    }
+    if (candidateUrl && candidateToken) {
+      url = candidateUrl;
+      token = candidateToken;
+      break;
+    }
   }
   if (
     !url &&
