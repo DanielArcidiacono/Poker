@@ -43,8 +43,20 @@ async function waitForNetwork(timeoutMs = 15000): Promise<boolean> {
   return hasUsableNetwork();
 }
 
-function quickTunnelArgs(port: string): string[] {
-  return ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`];
+export function quickTunnelArgs(
+  port: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const transportArgs = platform === "win32"
+    ? ["--protocol", "http2", "--no-prechecks"]
+    : [];
+  return [
+    "tunnel",
+    ...transportArgs,
+    "--no-autoupdate",
+    "--url",
+    `http://127.0.0.1:${port}`,
+  ];
 }
 
 function shouldAutoStartQuick(): boolean {
@@ -214,7 +226,7 @@ export function runQuickTunnelCli(): void {
   const port = process.env.PORT ?? "8787";
   const child = spawn(
     cloudflaredExecutable(),
-    ["tunnel", "--no-autoupdate", "--url", `http://127.0.0.1:${port}`],
+    quickTunnelArgs(port),
     { stdio: "inherit", env: process.env },
   );
   child.on("exit", (code) => process.exit(code ?? 1));

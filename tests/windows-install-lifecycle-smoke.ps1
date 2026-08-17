@@ -89,6 +89,25 @@ function Get-ProstarTask {
   }
 }
 
+function Resolve-TaskAccountSid {
+  param([string]$Identity)
+  if ([string]::IsNullOrWhiteSpace($Identity)) {
+    return ""
+  }
+  try {
+    $sid = New-Object Security.Principal.SecurityIdentifier($Identity)
+    return $sid.Value
+  } catch {
+    try {
+      $account = New-Object Security.Principal.NTAccount($Identity)
+      $sid = $account.Translate([Security.Principal.SecurityIdentifier])
+      return $sid.Value
+    } catch {
+      return ""
+    }
+  }
+}
+
 function Wait-Health {
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
     try {
@@ -208,6 +227,47 @@ function Get-FunctionDefinitionText {
     throw "$Label has no $FunctionName function."
   }
   return $functionAst.Extent.Text
+}
+
+function Assert-AdminLogCardinality {
+  $adminPath = Join-Path $RepositoryRoot "windows\prostar-admin.ps1"
+  $definition = [ScriptBlock]::Create((Get-FunctionDefinitionText `
+    -ScriptPath $adminPath `
+    -FunctionName "Show-Logs" `
+    -Label "Windows admin command"))
+  . $definition
+
+  $probeRoot = Join-Path $env:RUNNER_TEMP (
+    "prostar-admin-logs-" + [Guid]::NewGuid().ToString("N")
+  )
+  [void](New-Item -ItemType Directory -Path $probeRoot)
+  $LogsRoot = $probeRoot
+  try {
+    $emptyOutput = @(Show-Logs -Option "")
+    if ($emptyOutput.Count -ne 1 -or
+        $emptyOutput[0] -notmatch "^No Prostar logs exist yet") {
+      throw "The Windows admin command mishandled an empty log directory."
+    }
+
+    $outPath = Join-Path $probeRoot "prostar.out.log"
+    [IO.File]::WriteAllText($outPath, "single-log-output", $Utf8)
+    $singleOutput = @(Show-Logs -Option "")
+    if ($singleOutput.Count -ne 1 -or
+        $singleOutput[0] -ne "single-log-output") {
+      throw "The Windows admin command mishandled exactly one log file."
+    }
+
+    $errorPath = Join-Path $probeRoot "prostar.err.log"
+    [IO.File]::WriteAllText($errorPath, "second-log-output", $Utf8)
+    $combinedOutput = @(Show-Logs -Option "")
+    if ($combinedOutput.Count -ne 2 -or
+        $combinedOutput -notcontains "single-log-output" -or
+        $combinedOutput -notcontains "second-log-output") {
+      throw "The Windows admin command mishandled two log files."
+    }
+  } finally {
+    Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Assert-StandardUserDirectoryProtection {
@@ -686,6 +746,7 @@ try {
   Assert-LoggedNativeImplementation `
     -ScriptPath (Join-Path $RepositoryRoot "windows\production-install.ps1") `
     -Label "Production installer"
+  Assert-AdminLogCardinality
   Assert-StandardUserDirectoryProtection
 
   if (-not (Test-Path -LiteralPath $RuntimeSource -PathType Container)) {
@@ -765,9 +826,58 @@ try {
   if ([int]$task.Definition.Principal.LogonType -ne 3) {
     throw "The Prostar scheduled task is not using the interactive user token."
   }
+  $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  $principalSid = Resolve-TaskAccountSid -Identity ([string]$task.Definition.Principal.UserId)
+  if (-not $principalSid.Equals(
+      $currentSid,
+      [StringComparison]::OrdinalIgnoreCase
+    )) {
+    throw "The Prostar scheduled task principal does not match the installing user."
+  }
+  $matchingLogonTriggers = New-Object Collections.Generic.List[object]
+  $triggers = $task.Definition.Triggers
+  for ($index = 1; $index -le $triggers.Count; $index++) {
+    $trigger = $triggers.Item($index)
+    if ([int]$trigger.Type -eq 9 -and
+        (Resolve-TaskAccountSid -Identity ([string]$trigger.UserId)).Equals(
+          $currentSid,
+          [StringComparison]::OrdinalIgnoreCase
+        )) {
+      $matchingLogonTriggers.Add($trigger)
+    }
+  }
+  if ($matchingLogonTriggers.Count -ne 1 -or
+      -not [bool]$matchingLogonTriggers[0].Enabled) {
+    throw "The Prostar scheduled task has no enabled sign-in trigger for the installing user."
+  }
   $currentRelease = ([IO.File]::ReadAllText((Join-Path $AppRoot "current.txt"))).Trim()
   if ($currentRelease -ne $ReleaseId) {
     throw "The Prostar current-release pointer was not switched atomically."
+  }
+
+  $admin = Join-Path $AppRoot "prostar-admin.ps1"
+  $statusOutput = @(Invoke-PowerShellScript `
+    -ScriptPath $admin `
+    -ScriptArguments @("status") `
+    -Description "Windows admin status diagnostics")
+  $statusText = $statusOutput -join [Environment]::NewLine
+  foreach ($expected in @(
+      "Service: running",
+      "Task enabled: True",
+      "Task principal: current interactive user",
+      "Sign-in trigger: current user (enabled)",
+      "Task last run:",
+      "Task last result:",
+      "Task missed runs:",
+      "Dashboard configuration: not configured",
+      "Dashboard connection: unavailable"
+    )) {
+    if ($statusText.IndexOf($expected, [StringComparison]::Ordinal) -lt 0) {
+      throw "The Windows admin status omitted '$expected'."
+    }
+  }
+  if ($statusText -notmatch "Task last result: -?[0-9]+ \(0x[0-9A-F]{8}\)") {
+    throw "The Windows admin status did not format the task result in decimal and hexadecimal."
   }
 
   Assert-CapturePreflight
@@ -785,7 +895,6 @@ try {
     throw "The finalized Windows install retained its rollback marker."
   }
 
-  $admin = Join-Path $AppRoot "prostar-admin.ps1"
   Invoke-PowerShellScript -ScriptPath $admin -ScriptArguments @("restart") -Description "Windows admin restart"
   Wait-Health
   Assert-CapturePreflight

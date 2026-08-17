@@ -117,6 +117,25 @@ function Get-ProstarTask {
   }
 }
 
+function Resolve-TaskAccountSid {
+  param([string]$Identity)
+  if ([string]::IsNullOrWhiteSpace($Identity)) {
+    return ""
+  }
+  try {
+    $sid = New-Object Security.Principal.SecurityIdentifier($Identity)
+    return $sid.Value
+  } catch {
+    try {
+      $account = New-Object Security.Principal.NTAccount($Identity)
+      $sid = $account.Translate([Security.Principal.SecurityIdentifier])
+      return $sid.Value
+    } catch {
+      return ""
+    }
+  }
+}
+
 function Assert-OwnedTask {
   param($Task)
   if ($null -eq $Task) {
@@ -284,6 +303,18 @@ function Start-ProstarTask {
   }
 }
 
+function Test-DashboardConnection {
+  try {
+    $response = Invoke-AgentRequest `
+      -Path "/api/control-plane/health" `
+      -Method "GET" `
+      -TimeoutSec 2
+    return $response.StatusCode -eq 204
+  } catch {
+    return $false
+  }
+}
+
 function Show-Status {
   $releaseRoot = Get-CurrentReleaseRoot
   $service = Connect-TaskScheduler
@@ -297,19 +328,93 @@ function Show-Status {
     $state = [int]$task.State
     $stateName = if ($state -ge 0 -and $state -lt $stateNames.Count) { $stateNames[$state] } else { "unknown" }
     Write-Output "Service: $stateName"
-    Write-Output "Starts after sign-in: $([bool]$task.Enabled)"
+    Write-Output "Task enabled: $([bool]$task.Enabled)"
+
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $principalSid = Resolve-TaskAccountSid -Identity ([string]$task.Definition.Principal.UserId)
+    $logonType = [int]$task.Definition.Principal.LogonType
+    $principalMatches = $principalSid.Equals(
+      $currentSid,
+      [StringComparison]::OrdinalIgnoreCase
+    )
+    $principalStatus = if ($principalMatches -and $logonType -eq 3) {
+      "current interactive user"
+    } elseif ($principalMatches) {
+      "current user (logon type $logonType)"
+    } else {
+      "different user (logon type $logonType)"
+    }
+    Write-Output "Task principal: $principalStatus"
+
+    $hasLogonTrigger = $false
+    $hasMatchingLogonTrigger = $false
+    $hasEnabledMatchingLogonTrigger = $false
+    $triggers = $task.Definition.Triggers
+    for ($index = 1; $index -le $triggers.Count; $index++) {
+      $trigger = $triggers.Item($index)
+      if ([int]$trigger.Type -ne 9) {
+        continue
+      }
+      $hasLogonTrigger = $true
+      $triggerSid = Resolve-TaskAccountSid -Identity ([string]$trigger.UserId)
+      if ($triggerSid.Equals($currentSid, [StringComparison]::OrdinalIgnoreCase)) {
+        $hasMatchingLogonTrigger = $true
+        if ([bool]$trigger.Enabled) {
+          $hasEnabledMatchingLogonTrigger = $true
+        }
+      }
+    }
+    $triggerStatus = if ($hasEnabledMatchingLogonTrigger) {
+      "current user (enabled)"
+    } elseif ($hasMatchingLogonTrigger) {
+      "current user (disabled)"
+    } elseif ($hasLogonTrigger) {
+      "different user"
+    } else {
+      "missing"
+    }
+    Write-Output "Sign-in trigger: $triggerStatus"
+
+    $lastRun = [DateTime]$task.LastRunTime
+    $lastRunText = if ($lastRun.Year -gt 1900) {
+      $lastRun.ToUniversalTime().ToString("o")
+    } else {
+      "never"
+    }
+    $lastResult = [int64]$task.LastTaskResult
+    $unsignedResult = if ($lastResult -lt 0) {
+      $lastResult + 4294967296
+    } else {
+      $lastResult
+    }
+    $lastResultHex = $unsignedResult.ToString("X8")
+    Write-Output "Task last run: $lastRunText"
+    Write-Output "Task last result: $lastResult (0x$lastResultHex)"
+    Write-Output "Task missed runs: $([int]$task.NumberOfMissedRuns)"
   }
-  Write-Output "Health: $(if (Test-LocalHealth) { 'healthy' } else { 'unavailable' })"
+  $healthy = Test-LocalHealth
+  Write-Output "Health: $(if ($healthy) { 'healthy' } else { 'unavailable' })"
   Write-Output "Local URL: http://127.0.0.1:$(Get-Port)"
   $controlPlane = Get-EnvValue -Key "CONTROL_PLANE_URL" -ReleaseRoot $releaseRoot
   $clientId = Get-EnvValue -Key "PROSTAR_CLIENT_ID" -ReleaseRoot $releaseRoot
+  $agentSecret = Get-EnvValue -Key "PROSTAR_AGENT_SECRET" -ReleaseRoot $releaseRoot
+  if ([string]::IsNullOrWhiteSpace($agentSecret)) {
+    $agentSecret = Get-EnvValue -Key "AGENT_TOKEN" -ReleaseRoot $releaseRoot
+  }
   if (-not [string]::IsNullOrWhiteSpace($controlPlane) -and
-      -not [string]::IsNullOrWhiteSpace($clientId)) {
-    Write-Output "Dashboard: paired ($controlPlane)"
+      -not [string]::IsNullOrWhiteSpace($clientId) -and
+      -not [string]::IsNullOrWhiteSpace($agentSecret)) {
+    Write-Output "Dashboard configuration: configured ($controlPlane)"
+    $dashboardConnected = $healthy -and (Test-DashboardConnection)
+    Write-Output "Dashboard connection: $(if ($dashboardConnected) { 'connected' } else { 'unavailable' })"
     Write-Output "Session: $clientId"
     Write-Output "Cloudflare: dashboard-controlled"
   } else {
-    Write-Output "Dashboard: not paired"
+    $hasPartialDashboardConfiguration =
+      -not [string]::IsNullOrWhiteSpace($controlPlane) -or
+      -not [string]::IsNullOrWhiteSpace($clientId)
+    Write-Output "Dashboard configuration: $(if ($hasPartialDashboardConfiguration) { 'incomplete' } else { 'not configured' })"
+    Write-Output "Dashboard connection: unavailable"
     Write-Output "Cloudflare: disabled"
   }
   Write-Output "Logs: $LogsRoot"
@@ -317,11 +422,15 @@ function Show-Status {
 
 function Show-Logs {
   param([string]$Option)
-  $paths = @(
-    @(
-      (Join-Path $LogsRoot "prostar.out.log"),
-      (Join-Path $LogsRoot "prostar.err.log")
-    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+  [string[]]$paths = @(
+    foreach ($candidate in @(
+        (Join-Path $LogsRoot "prostar.out.log"),
+        (Join-Path $LogsRoot "prostar.err.log")
+      )) {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $candidate
+      }
+    }
   )
   if ($paths.Count -eq 0) {
     Write-Output "No Prostar logs exist yet in $LogsRoot."
@@ -339,7 +448,8 @@ function Show-Logs {
 function Invoke-AgentRequest {
   param(
     [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][string]$Method
+    [Parameter(Mandatory = $true)][string]$Method,
+    [int]$TimeoutSec = 20
   )
   $secret = Get-EnvValue -Key "PROSTAR_AGENT_SECRET"
   if ([string]::IsNullOrWhiteSpace($secret)) {
@@ -350,7 +460,7 @@ function Invoke-AgentRequest {
   }
   $headers = @{ Authorization = "Bearer $secret" }
   $uri = "http://127.0.0.1:$(Get-Port)$Path"
-  return Invoke-WebRequest -UseBasicParsing -Uri $uri -Method $Method -Headers $headers -TimeoutSec 20
+  return Invoke-WebRequest -UseBasicParsing -Uri $uri -Method $Method -Headers $headers -TimeoutSec $TimeoutSec
 }
 
 try {

@@ -205,7 +205,7 @@ function Invoke-ProstarHttp {
   $request.Timeout = $TimeoutMilliseconds
   $request.ReadWriteTimeout = $TimeoutMilliseconds
   $request.AllowAutoRedirect = $false
-  $request.UserAgent = "Prostar-Windows-Installer/1.2.3"
+  $request.UserAgent = "Prostar-Windows-Installer/1.2.4"
   if (-not [string]::IsNullOrWhiteSpace($Bearer)) {
     $request.Headers["Authorization"] = "Bearer $Bearer"
   }
