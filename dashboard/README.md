@@ -95,8 +95,8 @@ device's existing scoped identity, so it does not create a duplicate session.
 Anyone given an unexpired command can run it, so treat it as a short-lived
 secret. There is intentionally no permanent anonymous backend-enrollment
 command. Windows setup requires Windows PowerShell 5.1 and an unlocked Windows
-10 or 11 interactive session. Organization-level PowerShell policy can still
-block an otherwise supported install.
+10 version 1809 or later or Windows 11 interactive session. Organization-level
+PowerShell policy can still block an otherwise supported install.
 
 ## Session persistence
 

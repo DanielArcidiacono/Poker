@@ -92,76 +92,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          function Read-ExactBytes {
-            param(
-              [Parameter(Mandatory = $true)][System.IO.Stream]$Stream,
-              [Parameter(Mandatory = $true)][int]$Length
-            )
-            $buffer = New-Object byte[] $Length
-            $offset = 0
-            while ($offset -lt $Length) {
-              $count = $Stream.Read($buffer, $offset, $Length - $offset)
-              if ($count -eq 0) { throw "The Windows capture worker response was incomplete." }
-              $offset += $count
-            }
-            return ,$buffer
-          }
+          $smoke = @'
+          import { createWindowsCaptureBackend } from "./dist/windows-capture.js";
 
-          $powerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-          $worker = (Resolve-Path "windows\capture-worker.ps1").Path
-          $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
-          $startInfo = New-Object Diagnostics.ProcessStartInfo
-          $startInfo.FileName = $powerShell
-          $startInfo.Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$worker`""
-          $startInfo.UseShellExecute = $false
-          $startInfo.CreateNoWindow = $true
-          $startInfo.RedirectStandardInput = $true
-          $startInfo.RedirectStandardOutput = $true
-          $startInfo.RedirectStandardError = $true
-          $startInfo.StandardInputEncoding = $utf8
-          $process = New-Object Diagnostics.Process
-          $process.StartInfo = $startInfo
-          if (-not $process.Start()) { throw "Could not start the Windows capture worker." }
-
-          $requestJson = ConvertTo-Json @{
-            v = 1
-            id = 1
-            op = "probe"
-            jpegQuality = 60
-            scale = 0.5
-            maxWidth = 1920
-          } -Compress
-          $request = $utf8.GetBytes($requestJson)
-          $prefix = [BitConverter]::GetBytes([uint32]$request.Length)
-          $inputStream = $process.StandardInput.BaseStream
-          $inputStream.Write($prefix, 0, $prefix.Length)
-          $inputStream.Write($request, 0, $request.Length)
-          $inputStream.Flush()
-          $inputStream.Close()
-
-          if (-not $process.WaitForExit(30000)) {
-            $process.Kill()
-            throw "The Windows capture worker did not initialize and stop cleanly."
+          const backend = createWindowsCaptureBackend({ timeoutMs: 30_000 });
+          try {
+            await backend.preflight({ jpegQuality: 60, scale: 0.5, maxWidth: 1920 });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            // GitHub-hosted runners may not expose an interactive desktop. A
+            // typed capture error still proves C# initialization and the full
+            // production request/response protocol; every other error fails CI.
+            if (!message.startsWith("capture_failed: ")) throw error;
+          } finally {
+            backend.close();
           }
-          $stderr = $process.StandardError.ReadToEnd()
-          if ($process.ExitCode -ne 0) {
-            throw "The Windows capture worker failed during C# initialization: $stderr"
-          }
-
-          $outputStream = $process.StandardOutput.BaseStream
-          $responsePrefix = Read-ExactBytes -Stream $outputStream -Length 4
-          $responseLength = [BitConverter]::ToUInt32($responsePrefix, 0)
-          if ($responseLength -le 0 -or $responseLength -gt 65536) {
-            throw "The Windows capture worker returned an invalid response length."
-          }
-          $responseBytes = Read-ExactBytes -Stream $outputStream -Length ([int]$responseLength)
-          $response = ConvertFrom-Json ($utf8.GetString($responseBytes))
-          if ([int]$response.v -ne 1 -or [int]$response.id -ne 1 -or [int]$response.length -ne 0) {
-            throw "The Windows capture worker returned an invalid probe response."
-          }
-          if (-not [bool]$response.ok -and [string]::IsNullOrWhiteSpace([string]$response.code)) {
-            throw "The Windows capture worker returned an untyped probe error."
-          }
+          '@
+          node --input-type=module -e $smoke
+          if ($LASTEXITCODE -ne 0) { throw "The Windows capture worker smoke test failed." }
 
       - name: Smoke-test private Windows runtimes
         if: runner.os == 'Windows'

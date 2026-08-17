@@ -11,7 +11,7 @@ controls for each session.
 
 | macOS | Windows |
 | --- | --- |
-| macOS 15 or later on Apple silicon or Intel | Windows 10/11 on x64, or Windows 11 on ARM64 |
+| macOS 15 or later on Apple silicon or Intel | Windows 10 version 1809 or later on x64, or Windows 11 on x64/ARM64 |
 | Screen Recording permission for the current capture helper | Windows PowerShell 5.1, included with supported Windows releases |
 | The installing user must be signed in | The installing user must be signed in to an unlocked interactive desktop |
 
