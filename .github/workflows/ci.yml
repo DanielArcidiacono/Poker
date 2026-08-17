@@ -105,7 +105,10 @@ jobs:
           $process = New-Object Diagnostics.Process
           $process.StartInfo = $startInfo
           if (-not $process.Start()) { throw "Could not start the Windows capture worker." }
-          $process.StandardInput.Close()
+          # Close the raw pipe. Closing Process.StandardInput itself flushes the
+          # StreamWriter's UTF-8 preamble on Windows PowerShell 5.1, which the
+          # worker correctly treats as a truncated binary protocol frame.
+          $process.StandardInput.BaseStream.Close()
           if (-not $process.WaitForExit(30000)) {
             $process.Kill()
             throw "The Windows capture worker did not initialize and stop cleanly."
