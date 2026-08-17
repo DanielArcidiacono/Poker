@@ -70,7 +70,7 @@ On macOS:
   installer="$(/usr/bin/mktemp -t prostar-bootstrap.XXXXXX)" &&
   trap 'rm -f "$installer"' EXIT &&
   /usr/bin/curl -q --proto '=https' --tlsv1.2 -fsSL \
-    'https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.1/scripts/bootstrap.sh' \
+    'https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.2/scripts/bootstrap.sh' \
     -o "$installer" &&
   /bin/bash "$installer"
 )
@@ -86,7 +86,7 @@ try {
   $Client = New-Object Net.WebClient
   try {
     $Client.DownloadFile(
-      "https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.1/windows/bootstrap.ps1",
+      "https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.2/windows/bootstrap.ps1",
       $Installer
     )
   } finally {

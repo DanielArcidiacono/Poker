@@ -66,7 +66,7 @@ test("the production agent archive bundles both platform integrations", () => {
 
 test("public bootstrap is pinned, local-only, and quiet", () => {
   const script = readFileSync("scripts/bootstrap.sh", "utf8");
-  assert.match(script, /PROSTAR_REF:-v1\.2\.1/);
+  assert.match(script, /PROSTAR_REF:-v1\.2\.2/);
   assert.match(script, /'AUTO_TUNNEL=0'/);
   assert.match(script, /'CONTROL_PLANE_URL='/);
   assert.doesNotMatch(script, /cloudflared/);
@@ -230,6 +230,34 @@ test("Windows distribution is pinned, persistent, transactional, and quiet", () 
   }
 });
 
+test("Windows directory hardening writes only the DACL through DirectoryInfo", () => {
+  for (const scriptPath of [
+    "windows/production-install.ps1",
+    "windows/ensure-runtime.ps1",
+  ]) {
+    const script = readFileSync(scriptPath, "utf8");
+    const executable = script
+      .split(/\r?\n/)
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    assert.doesNotMatch(
+      executable,
+      /\bSet-Acl\b/,
+      `${scriptPath} must not use the provider Set-Acl path`,
+    );
+    assert.doesNotMatch(
+      executable,
+      /\.SetOwner\s*\(/,
+      `${scriptPath} must not request an owner write`,
+    );
+    assert.match(
+      executable,
+      /\(Get-Item\s+-LiteralPath\s+\$LiteralPath\s+-Force\)\.SetAccessControl\(\$acl\)/,
+      `${scriptPath} must persist its DACL through DirectoryInfo.SetAccessControl`,
+    );
+  }
+});
+
 test("Windows full uninstall fails closed and stops every owned process class", () => {
   const script = readFileSync("windows/uninstall-agent.ps1", "utf8");
   assert.match(script, /EnumerateFileSystemInfos/);
@@ -273,7 +301,7 @@ test("Windows admin layers propagate explicit script exit codes", () => {
 
 test("public Windows bootstrap is pinned, local-only, transactional, and quiet", () => {
   const script = readFileSync("windows/bootstrap.ps1", "utf8");
-  assert.match(script, /\[string\]\$Ref = "v1\.2\.1"/);
+  assert.match(script, /\[string\]\$Ref = "v1\.2\.2"/);
   assert.match(script, /"AUTO_TUNNEL=0"/);
   assert.match(script, /"CONTROL_PLANE_URL="/);
   assert.match(script, /-NodeOnly/);

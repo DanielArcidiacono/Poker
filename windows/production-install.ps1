@@ -77,7 +77,6 @@ function Protect-ProstarDirectory {
   param([Parameter(Mandatory = $true)][string]$LiteralPath)
   $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
   $acl = New-Object Security.AccessControl.DirectorySecurity
-  $acl.SetOwner($currentSid)
   $acl.SetAccessRuleProtection($true, $false)
   $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
     [Security.AccessControl.InheritanceFlags]::ObjectInherit
@@ -92,7 +91,11 @@ function Protect-ProstarDirectory {
     )
     [void]$acl.AddAccessRule($rule)
   }
-  Set-Acl -LiteralPath $LiteralPath -AclObject $acl
+  # Set-Acl asks the Windows PowerShell filesystem provider to persist the
+  # complete descriptor, including the SACL. Ordinary users do not have the
+  # SeSecurityPrivilege required for SACL access. DirectoryInfo persists only
+  # the DACL section modified above, which is all this per-user install needs.
+  (Get-Item -LiteralPath $LiteralPath -Force).SetAccessControl($acl)
 }
 
 function Get-EnvValueFromFile {
@@ -202,7 +205,7 @@ function Invoke-ProstarHttp {
   $request.Timeout = $TimeoutMilliseconds
   $request.ReadWriteTimeout = $TimeoutMilliseconds
   $request.AllowAutoRedirect = $false
-  $request.UserAgent = "Prostar-Windows-Installer/1.2.1"
+  $request.UserAgent = "Prostar-Windows-Installer/1.2.2"
   if (-not [string]::IsNullOrWhiteSpace($Bearer)) {
     $request.Headers["Authorization"] = "Bearer $Bearer"
   }

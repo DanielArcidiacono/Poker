@@ -70,7 +70,6 @@ function Protect-ProstarDirectory {
 
   $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
   $acl = New-Object Security.AccessControl.DirectorySecurity
-  $acl.SetOwner($currentSid)
   $acl.SetAccessRuleProtection($true, $false)
   $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
     [Security.AccessControl.InheritanceFlags]::ObjectInherit
@@ -87,7 +86,11 @@ function Protect-ProstarDirectory {
     )
     [void]$acl.AddAccessRule($rule)
   }
-  Set-Acl -LiteralPath $LiteralPath -AclObject $acl
+  # Set-Acl asks the Windows PowerShell filesystem provider to persist the
+  # complete descriptor, including the SACL. Ordinary users do not have the
+  # SeSecurityPrivilege required for SACL access. DirectoryInfo persists only
+  # the DACL section modified above, which is all this per-user install needs.
+  (Get-Item -LiteralPath $LiteralPath -Force).SetAccessControl($acl)
 }
 
 function Get-NativeArchitecture {

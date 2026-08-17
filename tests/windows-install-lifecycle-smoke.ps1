@@ -183,6 +183,305 @@ function Assert-LoggedNativeImplementation {
   }
 }
 
+function Get-FunctionDefinitionText {
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptPath,
+    [Parameter(Mandatory = $true)][string]$FunctionName,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  $tokens = $null
+  $parseErrors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $ScriptPath,
+    [ref]$tokens,
+    [ref]$parseErrors
+  )
+  if ($parseErrors.Count -gt 0) {
+    throw "$Label could not be parsed by Windows PowerShell 5.1."
+  }
+  $functionAst = $ast.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+      $node.Name -eq $FunctionName
+  }, $true)
+  if ($null -eq $functionAst) {
+    throw "$Label has no $FunctionName function."
+  }
+  return $functionAst.Extent.Text
+}
+
+function Assert-StandardUserDirectoryProtection {
+  $principal = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+  )
+  if (-not $principal.IsInRole(
+      [Security.Principal.WindowsBuiltInRole]::Administrator
+    )) {
+    throw "The standard-user ACL regression requires an elevated CI runner."
+  }
+
+  $probeId = [Guid]::NewGuid().ToString("N")
+  $userName = "pstar" + $probeId.Substring(0, 12)
+  $passwordText = "P!" + $probeId + "a9"
+  $securePassword = ConvertTo-SecureString $passwordText -AsPlainText -Force
+  $credential = New-Object Management.Automation.PSCredential(
+    "$env:COMPUTERNAME\$userName",
+    $securePassword
+  )
+  $commonDocuments = [Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::CommonDocuments
+  )
+  if ([string]::IsNullOrWhiteSpace($commonDocuments)) {
+    throw "Windows did not provide a Common Documents directory for the ACL probe."
+  }
+  $commonDocuments = [IO.Path]::GetFullPath($commonDocuments)
+  $probeRoot = [IO.Path]::GetFullPath((
+    Join-Path $commonDocuments ("ProstarAclSmoke-" + $probeId)
+  ))
+  $safePrefix = $commonDocuments.TrimEnd("\") + "\"
+  if (-not $probeRoot.StartsWith(
+      $safePrefix,
+      [StringComparison]::OrdinalIgnoreCase
+    )) {
+    throw "Refusing to use an ACL probe path outside Common Documents."
+  }
+
+  $productionDefinition = Join-Path $probeRoot "production-protect.ps1"
+  $runtimeDefinition = Join-Path $probeRoot "runtime-protect.ps1"
+  $harnessPath = Join-Path $probeRoot "standard-user-acl-smoke.ps1"
+  $resultPath = Join-Path $probeRoot "result.txt"
+  $createdUser = $false
+  $process = $null
+  $probeError = $null
+  $cleanupErrors = New-Object Collections.Generic.List[string]
+  $harness = @'
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $true)][string]$ProductionDefinition,
+  [Parameter(Mandatory = $true)][string]$RuntimeDefinition,
+  [Parameter(Mandatory = $true)][string]$ProbeRoot,
+  [Parameter(Mandatory = $true)][string]$ExpectedSid,
+  [Parameter(Mandatory = $true)][string]$ResultPath
+)
+
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = "Stop"
+$utf8 = New-Object Text.UTF8Encoding($false)
+
+function Assert-ProtectedDirectory {
+  param(
+    [Parameter(Mandatory = $true)][string]$LiteralPath,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  $directory = Get-Item -LiteralPath $LiteralPath -Force
+  $acl = $directory.GetAccessControl(
+    [Security.AccessControl.AccessControlSections]::Access
+  )
+  if (-not $acl.AreAccessRulesProtected) {
+    throw "$Label retained inherited access rules."
+  }
+
+  $rules = @($acl.GetAccessRules(
+    $true,
+    $false,
+    [Security.Principal.SecurityIdentifier]
+  ))
+  $expectedSids = @(
+    $ExpectedSid,
+    "S-1-5-18",
+    "S-1-5-32-544"
+  )
+  if ($rules.Count -ne $expectedSids.Count) {
+    throw "$Label has $($rules.Count) explicit rules; expected $($expectedSids.Count)."
+  }
+
+  $expectedInheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+    [Security.AccessControl.InheritanceFlags]::ObjectInherit
+  foreach ($sid in $expectedSids) {
+    $matches = @($rules | Where-Object {
+      $_.IdentityReference.Value -eq $sid
+    })
+    if ($matches.Count -ne 1) {
+      throw "$Label does not have exactly one explicit rule for $sid."
+    }
+    $rule = $matches[0]
+    if ($rule.AccessControlType -ne
+        [Security.AccessControl.AccessControlType]::Allow -or
+        $rule.FileSystemRights -ne
+        [Security.AccessControl.FileSystemRights]::FullControl -or
+        $rule.InheritanceFlags -ne $expectedInheritance -or
+        $rule.PropagationFlags -ne
+        [Security.AccessControl.PropagationFlags]::None -or
+        $rule.IsInherited) {
+      throw "$Label does not grant explicit inheritable FullControl to $sid."
+    }
+  }
+  return $acl.GetSecurityDescriptorSddlForm(
+    [Security.AccessControl.AccessControlSections]::Access
+  )
+}
+
+function Invoke-ProtectionProbe {
+  param(
+    [Parameter(Mandatory = $true)][string]$DefinitionPath,
+    [Parameter(Mandatory = $true)][string]$TargetPath,
+    [Parameter(Mandatory = $true)][string]$Label
+  )
+  $definition = [ScriptBlock]::Create(
+    [IO.File]::ReadAllText($DefinitionPath)
+  )
+  . $definition
+  [void][IO.Directory]::CreateDirectory($TargetPath)
+
+  Protect-ProstarDirectory -LiteralPath $TargetPath
+  $firstDacl = Assert-ProtectedDirectory -LiteralPath $TargetPath -Label $Label
+  Protect-ProstarDirectory -LiteralPath $TargetPath
+  $secondDacl = Assert-ProtectedDirectory -LiteralPath $TargetPath -Label $Label
+  if ($secondDacl -ne $firstDacl) {
+    throw "$Label changed its DACL when applied a second time."
+  }
+}
+
+try {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  if ($identity.User.Value -ne $ExpectedSid) {
+    throw "ACL probe ran as unexpected SID $($identity.User.Value)."
+  }
+  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+  if ($principal.IsInRole(
+      [Security.Principal.WindowsBuiltInRole]::Administrator
+    )) {
+    throw "ACL probe unexpectedly ran with administrator membership."
+  }
+
+  Invoke-ProtectionProbe `
+    -DefinitionPath $ProductionDefinition `
+    -TargetPath (Join-Path $ProbeRoot "production-target") `
+    -Label "Production installer"
+  Invoke-ProtectionProbe `
+    -DefinitionPath $RuntimeDefinition `
+    -TargetPath (Join-Path $ProbeRoot "runtime-target") `
+    -Label "Private runtime installer"
+  [IO.File]::WriteAllText($ResultPath, "passed", $utf8)
+  exit 0
+} catch {
+  [IO.File]::WriteAllText($ResultPath, ($_ | Out-String), $utf8)
+  exit 1
+}
+'@
+
+  try {
+    $user = New-LocalUser `
+      -Name $userName `
+      -Password $securePassword `
+      -AccountNeverExpires `
+      -PasswordNeverExpires `
+      -UserMayNotChangePassword
+    $createdUser = $true
+
+    $directory = [IO.Directory]::CreateDirectory($probeRoot)
+    $acl = $directory.GetAccessControl(
+      [Security.AccessControl.AccessControlSections]::Access
+    )
+    $inheritance = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+      [Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $rule = New-Object Security.AccessControl.FileSystemAccessRule(
+      $user.SID,
+      [Security.AccessControl.FileSystemRights]::FullControl,
+      $inheritance,
+      [Security.AccessControl.PropagationFlags]::None,
+      [Security.AccessControl.AccessControlType]::Allow
+    )
+    [void]$acl.AddAccessRule($rule)
+    $directory.SetAccessControl($acl)
+
+    [IO.File]::WriteAllText(
+      $productionDefinition,
+      (Get-FunctionDefinitionText `
+        -ScriptPath (Join-Path $RepositoryRoot "windows\production-install.ps1") `
+        -FunctionName "Protect-ProstarDirectory" `
+        -Label "Production installer"),
+      $Utf8
+    )
+    [IO.File]::WriteAllText(
+      $runtimeDefinition,
+      (Get-FunctionDefinitionText `
+        -ScriptPath (Join-Path $RepositoryRoot "windows\ensure-runtime.ps1") `
+        -FunctionName "Protect-ProstarDirectory" `
+        -Label "Private runtime installer"),
+      $Utf8
+    )
+    [IO.File]::WriteAllText($harnessPath, $harness, $Utf8)
+
+    $powerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $arguments = @(
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", $harnessPath,
+      "-ProductionDefinition", $productionDefinition,
+      "-RuntimeDefinition", $runtimeDefinition,
+      "-ProbeRoot", $probeRoot,
+      "-ExpectedSid", $user.SID.Value,
+      "-ResultPath", $resultPath
+    )
+    $process = Start-Process `
+      -FilePath $powerShell `
+      -ArgumentList $arguments `
+      -Credential $credential `
+      -WorkingDirectory $probeRoot `
+      -PassThru
+    if (-not $process.WaitForExit(60000)) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      throw "The standard-user ACL regression timed out."
+    }
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) {
+      $detail = if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
+        [IO.File]::ReadAllText($resultPath).Trim()
+      } else {
+        "The standard-user process wrote no result."
+      }
+      throw "The standard-user ACL regression failed: $detail"
+    }
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf) -or
+        [IO.File]::ReadAllText($resultPath).Trim() -ne "passed") {
+      throw "The standard-user ACL regression returned no success marker."
+    }
+  } catch {
+    $probeError = $_
+  } finally {
+    if ($null -ne $process -and -not $process.HasExited) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      [void]$process.WaitForExit(10000)
+    }
+    if (Test-Path -LiteralPath $probeRoot) {
+      try {
+        Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction Stop
+      } catch {
+        $cleanupErrors.Add("probe directory: " + $_.Exception.Message)
+      }
+    }
+    if ($createdUser) {
+      try {
+        Remove-LocalUser -Name $userName -ErrorAction Stop
+      } catch {
+        $cleanupErrors.Add("local account: " + $_.Exception.Message)
+      }
+    }
+  }
+
+  if ($null -ne $probeError) {
+    if ($cleanupErrors.Count -gt 0) {
+      [Console]::Error.WriteLine(
+        "Standard-user ACL cleanup also failed: " + ($cleanupErrors -join "; ")
+      )
+    }
+    throw $probeError
+  }
+  if ($cleanupErrors.Count -gt 0) {
+    throw "Standard-user ACL cleanup failed: $($cleanupErrors -join '; ')"
+  }
+}
+
 function Remove-CiInstall {
   if (-not (Test-Path -LiteralPath $AppRoot)) {
     return
@@ -347,6 +646,7 @@ try {
   Assert-LoggedNativeImplementation `
     -ScriptPath (Join-Path $RepositoryRoot "windows\production-install.ps1") `
     -Label "Production installer"
+  Assert-StandardUserDirectoryProtection
 
   if (-not (Test-Path -LiteralPath $RuntimeSource -PathType Container)) {
     throw "The private-runtime smoke did not create $RuntimeSource."
