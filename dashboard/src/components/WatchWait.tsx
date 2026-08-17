@@ -4,13 +4,15 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 export function WatchWait({
+  actionLabel = "Check now",
+  actionPath,
   detail,
   sessionName,
-  watchPath,
 }: {
+  actionLabel?: string;
+  actionPath: string;
   detail: string;
   sessionName: string;
-  watchPath: string;
 }) {
   const router = useRouter();
 
@@ -46,8 +48,8 @@ export function WatchWait({
         {detail}
       </p>
       <div className="actions">
-        <a className="button-link" href={watchPath}>
-          Check now
+        <a className="button-link" href={actionPath}>
+          {actionLabel}
         </a>
         <a className="button-link secondary-button" href="/">
           Sessions
