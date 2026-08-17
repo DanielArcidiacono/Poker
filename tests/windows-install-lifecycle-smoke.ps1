@@ -252,6 +252,8 @@ function Assert-StandardUserDirectoryProtection {
   $resultPath = Join-Path $probeRoot "result.txt"
   $createdUser = $false
   $process = $null
+  $processId = $null
+  $processCompleted = $false
   $probeError = $null
   $cleanupErrors = New-Object Collections.Generic.List[string]
   $harness = @'
@@ -429,29 +431,67 @@ try {
       -Credential $credential `
       -WorkingDirectory $probeRoot `
       -PassThru
-    if (-not $process.WaitForExit(60000)) {
-      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-      throw "The standard-user ACL regression timed out."
+    $processId = $process.Id
+    $processHandleStatus = "not cached"
+    try {
+      # Windows PowerShell 5.1 can return a Process whose ExitCode remains
+      # $null if its native handle was never materialized before a fast exit.
+      # Reading Handle immediately keeps ExitCode available when PS5 supports it.
+      $processHandle = $process.Handle
+      $processHandleStatus = "cached 0x$($processHandle.ToInt64().ToString('x'))"
+    } catch {
+      $processHandleStatus = "unavailable: " + $_.Exception.Message
     }
+    if (-not $process.WaitForExit(60000)) {
+      Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+      throw "The standard-user ACL regression timed out (PID=$processId; Handle=$processHandleStatus)."
+    }
+    $processCompleted = $true
     $process.WaitForExit()
-    if ($process.ExitCode -ne 0) {
-      $detail = if (Test-Path -LiteralPath $resultPath -PathType Leaf) {
-        [IO.File]::ReadAllText($resultPath).Trim()
+
+    $exitCodeAvailable = $false
+    $exitCode = $null
+    $exitCodeStatus = "unavailable"
+    try {
+      $rawExitCode = $process.ExitCode
+      if ($null -ne $rawExitCode) {
+        $exitCode = [int]$rawExitCode
+        $exitCodeAvailable = $true
+        $exitCodeStatus = [string]$exitCode
+      }
+    } catch {
+      $exitCodeStatus = "unavailable: " + $_.Exception.Message
+    }
+
+    $hasResult = Test-Path -LiteralPath $resultPath -PathType Leaf
+    $result = if ($hasResult) {
+      [IO.File]::ReadAllText($resultPath).Trim()
+    } else {
+      ""
+    }
+    $diagnostic = "PID=$processId; ExitCode=$exitCodeStatus; Handle=$processHandleStatus"
+    if (-not $hasResult -or $result -ne "passed") {
+      $detail = if ($hasResult -and -not [string]::IsNullOrWhiteSpace($result)) {
+        $result
       } else {
         "The standard-user process wrote no result."
       }
-      throw "The standard-user ACL regression failed: $detail"
+      throw "The standard-user ACL regression failed ($diagnostic): $detail"
     }
-    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf) -or
-        [IO.File]::ReadAllText($resultPath).Trim() -ne "passed") {
-      throw "The standard-user ACL regression returned no success marker."
+    if ($exitCodeAvailable -and $exitCode -ne 0) {
+      throw "The standard-user ACL regression wrote its success marker but exited abnormally ($diagnostic)."
     }
+    Write-Output "Standard-user ACL regression passed ($diagnostic; Result=passed)."
   } catch {
     $probeError = $_
   } finally {
-    if ($null -ne $process -and -not $process.HasExited) {
-      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-      [void]$process.WaitForExit(10000)
+    if ($null -ne $process -and -not $processCompleted) {
+      try {
+        Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+        [void]$process.WaitForExit(10000)
+      } catch {
+        $cleanupErrors.Add("probe process: " + $_.Exception.Message)
+      }
     }
     if (Test-Path -LiteralPath $probeRoot) {
       try {
