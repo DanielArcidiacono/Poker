@@ -41,7 +41,13 @@ test("LaunchAgent renderer treats env values as XML data", async () => {
     assert.match(output, /\/path\/with &amp;\/cloudflared/);
     assert.doesNotMatch(output, /homebrew/);
     assert.equal(output.includes("__PROSTAR_VIEWER_PASSWORD__"), false);
-    assert.equal((await stat(destination)).mode & 0o777, 0o600);
+    // POSIX mode bits are meaningful on macOS, where this plist and its
+    // embedded credentials are installed. Windows reports synthetic mode
+    // bits for every file, so keep exercising XML rendering there without
+    // pretending that chmod semantics apply.
+    if (process.platform !== "win32") {
+      assert.equal((await stat(destination)).mode & 0o777, 0o600);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

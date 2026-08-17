@@ -53,13 +53,16 @@ test("generated Windows installer parses in Windows PowerShell 5.1", (t) => {
     const parser = [
       "$tokens = $null",
       "$errors = $null",
-      "[void][System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$tokens, [ref]$errors)",
+      "[void][System.Management.Automation.Language.Parser]::ParseFile($env:PROSTAR_PARSE_FILE, [ref]$tokens, [ref]$errors)",
       "if ($errors.Count -gt 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 }",
     ].join("; ");
     const parsed = spawnSync(
       "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", parser, scriptPath],
-      { encoding: "utf8" },
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", parser],
+      {
+        encoding: "utf8",
+        env: { ...process.env, PROSTAR_PARSE_FILE: scriptPath },
+      },
     );
     assert.equal(parsed.status, 0, parsed.stderr);
   } finally {
