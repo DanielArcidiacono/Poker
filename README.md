@@ -39,6 +39,12 @@ application dependencies. On macOS, the only interactive step is Apple's
 required Screen Recording approval on first use. Windows has no equivalent
 Screen Recording consent dialog for this desktop capture API.
 
+Prostar's Cloudflare connection is outbound-only. On Windows, Prostar uses
+HTTP/2 over TCP so it does not need a Windows Firewall exception or inbound
+access. If Windows shows a firewall dialog for `cloudflared` while upgrading
+an older install, choose **Cancel** or **Don't allow**; remote viewing still
+uses the outbound tunnel.
+
 Successful production setup writes exactly one line to its shell:
 
 ```text
@@ -70,7 +76,7 @@ On macOS:
   installer="$(/usr/bin/mktemp -t prostar-bootstrap.XXXXXX)" &&
   trap 'rm -f "$installer"' EXIT &&
   /usr/bin/curl -q --proto '=https' --tlsv1.2 -fsSL \
-    'https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.3/scripts/bootstrap.sh' \
+    'https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.4/scripts/bootstrap.sh' \
     -o "$installer" &&
   /bin/bash "$installer"
 )
@@ -86,7 +92,7 @@ try {
   $Client = New-Object Net.WebClient
   try {
     $Client.DownloadFile(
-      "https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.3/windows/bootstrap.ps1",
+      "https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.4/windows/bootstrap.ps1",
       $Installer
     )
   } finally {

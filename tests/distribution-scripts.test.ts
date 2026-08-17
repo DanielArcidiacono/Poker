@@ -66,7 +66,7 @@ test("the production agent archive bundles both platform integrations", () => {
 
 test("public bootstrap is pinned, local-only, and quiet", () => {
   const script = readFileSync("scripts/bootstrap.sh", "utf8");
-  assert.match(script, /PROSTAR_REF:-v1\.2\.3/);
+  assert.match(script, /PROSTAR_REF:-v1\.2\.4/);
   assert.match(script, /'AUTO_TUNNEL=0'/);
   assert.match(script, /'CONTROL_PLANE_URL='/);
   assert.doesNotMatch(script, /cloudflared/);
@@ -340,9 +340,24 @@ test("Windows admin layers propagate explicit script exit codes", () => {
   assert.match(installer, /& \$script @Arguments\s*exit \$LASTEXITCODE/);
 });
 
+test("Windows admin diagnostics are cardinality-safe and report task connectivity", () => {
+  const admin = readFileSync("windows/prostar-admin.ps1", "utf8");
+  assert.match(admin, /\[string\[\]\]\$paths = @\(/);
+  assert.match(admin, /Task enabled:/);
+  assert.match(admin, /Task principal:/);
+  assert.match(admin, /Sign-in trigger:/);
+  assert.match(admin, /Task last run:/);
+  assert.match(admin, /Task last result:.*0x\$lastResultHex/);
+  assert.match(admin, /Task missed runs:/);
+  assert.match(admin, /api\/control-plane\/health/);
+  assert.match(admin, /Dashboard configuration:/);
+  assert.match(admin, /Dashboard connection:/);
+  assert.doesNotMatch(admin, /Write-Output[^\r\n]*\$agentSecret/);
+});
+
 test("public Windows bootstrap is pinned, local-only, transactional, and quiet", () => {
   const script = readFileSync("windows/bootstrap.ps1", "utf8");
-  assert.match(script, /\[string\]\$Ref = "v1\.2\.3"/);
+  assert.match(script, /\[string\]\$Ref = "v1\.2\.4"/);
   assert.match(script, /"AUTO_TUNNEL=0"/);
   assert.match(script, /"CONTROL_PLANE_URL="/);
   assert.match(script, /-NodeOnly/);

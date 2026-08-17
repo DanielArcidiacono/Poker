@@ -85,6 +85,11 @@ cross-platform agent from root-level repository files.
 7. Return to the dashboard; the device appears under **Sessions** with its
    platform label.
 
+Cloudflare Tunnel connects outbound. On Windows it uses HTTP/2/TCP, so Prostar
+never needs a Windows Firewall exception or inbound access; if an older
+installation causes Windows to ask about `cloudflared`, choose **Cancel** or
+**Don't allow**.
+
 Detailed setup output is stored at `~/Library/Logs/Prostar/install.log` on
 macOS or `%LOCALAPPDATA%\Prostar\logs\install.log` on Windows. On failure, the
 shell prints a concise message pointing there.

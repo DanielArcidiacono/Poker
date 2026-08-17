@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Repository = "DanielArcidiacono/Poker",
-  [string]$Ref = "v1.2.3",
+  [string]$Ref = "v1.2.4",
   [string]$ViewerPassword = ""
 )
 
