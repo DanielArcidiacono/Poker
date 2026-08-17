@@ -5,6 +5,7 @@ import type {
   SessionState,
   SessionSummary,
 } from "@/lib/session-summary";
+import { platformDisplayName } from "@/lib/platform";
 
 const POLL_MS = 5_000;
 
@@ -135,7 +136,7 @@ export function SessionsPage() {
             </p>
           </div>
           <a className="button-link secondary-button" href="/install">
-            Set up Mac
+            Set up device
           </a>
         </div>
 
@@ -150,7 +151,7 @@ export function SessionsPage() {
         ) : sessions.length === 0 ? (
           <div className="sessions-empty">
             <h3>No active sessions</h3>
-            <p>Install Prostar on a Mac to make it available here.</p>
+            <p>Install Prostar on a device to make it available here.</p>
             <a className="button-link" href="/install">
               Set up Prostar
             </a>
@@ -177,6 +178,9 @@ export function SessionsPage() {
                   <div className="session-identity">
                     <div className="session-title" id={titleId}>
                       <strong>{session.name}</strong>
+                      <span className="session-platform-badge">
+                        {platformDisplayName(session.platform)}
+                      </span>
                       {duplicateNames.has(session.name) ? (
                         <span className="session-id-badge">
                           {session.id.slice(0, 8)}

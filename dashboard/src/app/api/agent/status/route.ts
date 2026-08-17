@@ -8,6 +8,7 @@ import {
   resolveAgentProtocol,
   validAgentInstanceId,
 } from "@/lib/legacy-protocol";
+import { normalizeAgentPlatform, type AgentPlatform } from "@/lib/platform";
 import { getStore } from "@/lib/store";
 import { normalizeStreamUrl } from "@/lib/stream-url";
 
@@ -20,6 +21,7 @@ export async function POST(req: Request) {
     viewerCount?: number | null;
     message?: string | null;
     hostname?: string | null;
+    platform?: unknown;
     product?: string | null;
     version?: string | null;
     sharingRevision?: string | null;
@@ -93,6 +95,18 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  let platform: AgentPlatform | null | undefined;
+  if (body.platform === null) {
+    platform = null;
+  } else if (body.platform !== undefined) {
+    platform = normalizeAgentPlatform(body.platform) ?? undefined;
+    if (!platform) {
+      return NextResponse.json(
+        { error: "invalid platform" },
+        { status: 400 },
+      );
+    }
+  }
 
   const publicUrl =
     body.publicUrl === undefined
@@ -121,6 +135,7 @@ export async function POST(req: Request) {
       typeof body.hostname === "string"
         ? body.hostname.slice(0, 255)
         : body.hostname,
+    platform,
     product:
       typeof body.product === "string"
         ? body.product.slice(0, 64)

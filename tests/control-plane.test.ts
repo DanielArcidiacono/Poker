@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  resolveAgentPlatform,
+  resolveDeviceDisplayName,
   resolveMacDisplayName,
   startControlPlane,
 } from "../src/control-plane.js";
@@ -35,6 +37,28 @@ test("Mac display name prefers stable System Configuration names", () => {
   );
 });
 
+test("device identity uses Windows COMPUTERNAME and reports a stable platform", () => {
+  assert.equal(
+    resolveDeviceDisplayName({
+      platform: "win32",
+      computerName: () => "  PROSTAR-PC  ",
+      hostname: () => "network-name.example",
+    }),
+    "PROSTAR-PC",
+  );
+  assert.equal(
+    resolveDeviceDisplayName({
+      platform: "win32",
+      computerName: () => "",
+      hostname: () => "fallback-pc",
+    }),
+    "fallback-pc",
+  );
+  assert.equal(resolveAgentPlatform("darwin"), "macos");
+  assert.equal(resolveAgentPlatform("win32"), "windows");
+  assert.equal(resolveAgentPlatform("linux"), "other");
+});
+
 async function waitFor(condition: () => boolean, timeoutMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
@@ -58,6 +82,7 @@ test("desired state stops sharing and failed live status is retried", async () =
     publicUrl: string | null;
     watchToken: string | null;
     viewerCount: number;
+    platform: "macos" | "windows" | "other";
   }> = [];
   const clientId = "11111111-1111-4111-8111-111111111111";
 
@@ -65,8 +90,12 @@ test("desired state stops sharing and failed live status is retried", async () =
     const url = String(input);
     if (url.endsWith("/api/agent/poll")) {
       if (init?.method !== "DELETE") {
-        const body = JSON.parse(String(init?.body)) as { clientId: string };
+        const body = JSON.parse(String(init?.body)) as {
+          clientId: string;
+          platform: string;
+        };
         assert.equal(body.clientId, clientId);
+        assert.equal(body.platform, resolveAgentPlatform());
       }
       return Response.json({
         isOwner: true,
@@ -121,6 +150,11 @@ test("desired state stops sharing and failed live status is retried", async () =
     handle.setViewerCount(2);
     await waitFor(() => statusBodies.some((body) => body.viewerCount === 2));
     assert.ok(statusBodies.every((body) => body.clientId === clientId));
+    assert.ok(
+      statusBodies.every(
+        (body) => body.platform === resolveAgentPlatform(),
+      ),
+    );
 
     shouldShare = false;
     revision = "2";

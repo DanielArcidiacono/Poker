@@ -9,12 +9,14 @@ import {
   resolveAgentProtocol,
   validAgentInstanceId,
 } from "@/lib/legacy-protocol";
+import { normalizeAgentPlatform } from "@/lib/platform";
 import { getStore } from "@/lib/store";
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
     clientId?: string;
     hostname?: string;
+    platform?: unknown;
     product?: string;
     version?: string;
     agentInstanceId?: string;
@@ -24,6 +26,10 @@ export async function POST(req: Request) {
     : LEGACY_CLIENT_ID;
   if (!clientId) {
     return NextResponse.json({ error: "invalid client id" }, { status: 400 });
+  }
+  const platform = normalizeAgentPlatform(body.platform);
+  if (body.platform !== undefined && body.platform !== null && !platform) {
+    return NextResponse.json({ error: "invalid platform" }, { status: 400 });
   }
   const authorized = body.clientId
     ? await checkScopedAgentBearer(
@@ -54,6 +60,7 @@ export async function POST(req: Request) {
         typeof body.hostname === "string"
           ? body.hostname.slice(0, 255)
           : undefined,
+      platform: platform ?? undefined,
       product:
         typeof body.product === "string"
           ? body.product.slice(0, 64)

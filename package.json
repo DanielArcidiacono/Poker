@@ -1,8 +1,8 @@
 {
   "name": "prostar-agent",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
-  "description": "Prostar view-only Mac screen agent",
+  "description": "Prostar view-only macOS and Windows screen agent",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -12,9 +12,9 @@
     "test": "tsx --test tests/*.test.ts dashboard/tests/*.test.ts",
     "start": "npm run build --silent && node dist/server.js",
     "tunnel": "tsx src/tunnel-cli.ts",
-    "admin": "bash scripts/prostar-admin.sh",
-    "install-agent": "bash scripts/install-agent.sh",
-    "uninstall-agent": "bash scripts/uninstall-agent.sh"
+    "admin": "node scripts/run-platform-script.mjs admin",
+    "install-agent": "node scripts/run-platform-script.mjs install",
+    "uninstall-agent": "node scripts/run-platform-script.mjs uninstall"
   },
   "engines": {
     "node": ">=20.9.0"

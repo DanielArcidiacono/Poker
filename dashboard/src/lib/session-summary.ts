@@ -1,4 +1,5 @@
 import type { SessionReport } from "./store";
+import type { AgentPlatform } from "./platform";
 
 export type SessionState =
   | "ready"
@@ -15,6 +16,7 @@ export type SessionSummary = {
   lastSeenAt: number;
   viewerCount: number;
   version: string | null;
+  platform: AgentPlatform | null;
 };
 
 export function summarizeSession(report: SessionReport): SessionSummary {
@@ -33,12 +35,20 @@ export function summarizeSession(report: SessionReport): SessionSummary {
         : "error";
   }
 
+  const fallbackName =
+    report.platform === "windows"
+      ? "Windows PC"
+      : report.platform === "macos"
+        ? "Mac"
+        : "Device";
+
   return {
     id: report.id,
-    name: report.hostname?.trim() || `Mac ${report.id.slice(0, 8)}`,
+    name: report.hostname?.trim() || `${fallbackName} ${report.id.slice(0, 8)}`,
     state,
     lastSeenAt: report.lastSeen ?? Date.now(),
     viewerCount: report.viewerCount,
     version: report.version,
+    platform: report.platform,
   };
 }

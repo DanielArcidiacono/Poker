@@ -1,5 +1,6 @@
 import { Redis } from "@upstash/redis";
 import { timingSafeEqual } from "node:crypto";
+import type { AgentPlatform } from "./platform";
 
 export type SessionReport = {
   id: string;
@@ -14,6 +15,7 @@ export type SessionReport = {
   viewerCount: number;
   message: string | null;
   hostname: string | null;
+  platform: AgentPlatform | null;
   product: string;
   version: string | null;
 };
@@ -25,6 +27,7 @@ export type StatusPayload = {
   viewerCount?: number;
   message?: string | null;
   hostname?: string | null;
+  platform?: AgentPlatform | null;
   product?: string | null;
   version?: string | null;
   sharingRevision?: string | null;
@@ -34,6 +37,7 @@ export type StatusPayload = {
 type Heartbeat = {
   at: number;
   hostname: string | null;
+  platform: AgentPlatform | null;
   product: string;
   version: string | null;
 };
@@ -51,6 +55,7 @@ type StoredStatus = {
   viewerCount: number;
   message: string | null;
   hostname: string | null;
+  platform: AgentPlatform | null;
   product: string;
   version: string | null;
   statusRevision: string | null;
@@ -87,6 +92,7 @@ export type Store = {
     clientId: string,
     info: {
       hostname?: string;
+      platform?: AgentPlatform;
       product?: string;
       version?: string;
     },
@@ -113,7 +119,7 @@ export type Store = {
 /** Agents can spend tens of seconds starting a tunnel without looking dead. */
 export const HEARTBEAT_TTL_MS = 70_000;
 const AGENT_LEASE_TTL_MS = 90_000;
-// Clean Macs download both private runtimes and npm dependencies before the
+// Clean devices download both private runtimes and npm dependencies before the
 // credential is activated. An abandoned setup still self-revokes.
 const ENROLLMENT_TTL_MS = 60 * 60_000;
 const PRODUCT_NAME = "Prostar";
@@ -136,6 +142,7 @@ function emptyStatus(): StoredStatus {
     viewerCount: 0,
     message: null,
     hostname: null,
+    platform: null,
     product: PRODUCT_NAME,
     version: null,
     statusRevision: null,
@@ -227,6 +234,7 @@ function reportFrom(
         : 0,
     message: currentStatus.message,
     hostname: currentStatus.hostname ?? heartbeat?.hostname ?? null,
+    platform: currentStatus.platform ?? heartbeat?.platform ?? null,
     product: currentStatus.product || heartbeat?.product || PRODUCT_NAME,
     version: currentStatus.version ?? heartbeat?.version ?? null,
   };
@@ -284,6 +292,8 @@ function mergeStatus(
       update.message !== undefined ? update.message : previous.message,
     hostname:
       update.hostname !== undefined ? update.hostname : previous.hostname,
+    platform:
+      update.platform !== undefined ? update.platform : previous.platform,
     product: update.product?.trim() || previous.product || PRODUCT_NAME,
     version:
       update.version !== undefined ? update.version : previous.version,
@@ -301,6 +311,7 @@ function reportFromMemory(clientId: string, session: MemorySession): SessionRepo
       ? {
           at: session.lastSeen,
           hostname: session.hostname,
+          platform: session.platform,
           product: session.product,
           version: session.version,
         }
@@ -386,6 +397,7 @@ function createMemoryStore(): Store {
       const session = memorySession(clientId);
       session.lastSeen = Date.now();
       if (info.hostname) session.hostname = info.hostname;
+      if (info.platform) session.platform = info.platform;
       if (info.product) session.product = info.product;
       if (info.version) session.version = info.version;
     },
@@ -591,6 +603,7 @@ return 0`,
         {
           at: now,
           hostname: info.hostname ?? null,
+          platform: info.platform ?? null,
           product: info.product?.trim() || PRODUCT_NAME,
           version: info.version?.trim() || null,
         } satisfies Heartbeat,
@@ -697,6 +710,7 @@ return 0`,
       transaction.set(keys.status, {
         ...emptyStatus(),
         hostname: previous?.hostname ?? null,
+        platform: previous?.platform ?? null,
         product: previous?.product ?? PRODUCT_NAME,
         version: previous?.version ?? null,
         message,
@@ -738,6 +752,7 @@ return 0`,
         {
           at: now,
           hostname: status.hostname ?? next.hostname,
+          platform: status.platform ?? next.platform,
           product: status.product?.trim() || next.product || PRODUCT_NAME,
           version: status.version ?? next.version,
         } satisfies Heartbeat,

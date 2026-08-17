@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 15
+            os: macos-15
+          - name: Windows Server 2022
+            os: windows-2022
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Install agent dependencies
+        run: npm ci
+
+      - name: Install dashboard dependencies
+        run: npm --prefix dashboard ci
+
+      - name: Test
+        run: npm test
+
+      - name: Type-check agent
+        run: npm run check
+
+      - name: Type-check dashboard
+        run: npm --prefix dashboard run check
+
+      - name: Build agent
+        run: npm run build
+
+      - name: Build dashboard and distribution archive
+        run: npm --prefix dashboard run build
+
+      - name: Validate macOS shell scripts
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash -n scripts/*.sh
+
+      - name: Smoke-test private macOS runtimes
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          PROSTAR_APP_ROOT: ${{ runner.temp }}/ProstarRuntimeSmoke
+        run: |
+          bash scripts/ensure-runtime.sh --with-cloudflared
+          "$PROSTAR_APP_ROOT/runtime/bin/node" --version
+          "$PROSTAR_APP_ROOT/runtime/bin/cloudflared" --version
+
+      - name: Parse Windows scripts with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if ($PSVersionTable.PSVersion.Major -ne 5) {
+            throw "Expected Windows PowerShell 5.1, found $($PSVersionTable.PSVersion)."
+          }
+          Get-ChildItem -LiteralPath windows -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $messages = ($errors | ForEach-Object { $_.Message }) -join [Environment]::NewLine
+              throw "$($_.Name) failed to parse:`n$messages"
+            }
+          }
+
+      - name: Compile and start the Windows capture worker
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $powerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          $worker = (Resolve-Path "windows\capture-worker.ps1").Path
+          $startInfo = New-Object Diagnostics.ProcessStartInfo
+          $startInfo.FileName = $powerShell
+          $startInfo.Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$worker`""
+          $startInfo.UseShellExecute = $false
+          $startInfo.CreateNoWindow = $true
+          $startInfo.RedirectStandardInput = $true
+          $startInfo.RedirectStandardOutput = $true
+          $startInfo.RedirectStandardError = $true
+          $process = New-Object Diagnostics.Process
+          $process.StartInfo = $startInfo
+          if (-not $process.Start()) { throw "Could not start the Windows capture worker." }
+          $process.StandardInput.Close()
+          if (-not $process.WaitForExit(30000)) {
+            $process.Kill()
+            throw "The Windows capture worker did not initialize and stop cleanly."
+          }
+          $stderr = $process.StandardError.ReadToEnd()
+          if ($process.ExitCode -ne 0) {
+            throw "The Windows capture worker failed during C# initialization: $stderr"
+          }
+
+      - name: Smoke-test private Windows runtimes
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:PROSTAR_APP_ROOT = Join-Path $env:RUNNER_TEMP "ProstarRuntimeSmoke"
+          & windows\ensure-runtime.ps1 -WithCloudflared
+          $runtime = Join-Path $env:PROSTAR_APP_ROOT "runtime"
+          $nodeId = (Get-Content -LiteralPath (Join-Path $runtime "node-current.txt") -Raw).Trim()
+          $cloudflaredId = (Get-Content -LiteralPath (Join-Path $runtime "cloudflared-current.txt") -Raw).Trim()
+          & (Join-Path $runtime "$nodeId\node.exe") --version
+          if ($LASTEXITCODE -ne 0) { throw "The private Node.js runtime failed." }
+          & (Join-Path $runtime "$cloudflaredId\cloudflared.exe") --version
+          if ($LASTEXITCODE -ne 0) { throw "The private cloudflared runtime failed." }

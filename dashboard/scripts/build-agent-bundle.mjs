@@ -27,6 +27,7 @@ const files = [
   "public",
   "scripts",
   "launchd",
+  "windows",
 ];
 
 mkdirSync(outputDir, { recursive: true });

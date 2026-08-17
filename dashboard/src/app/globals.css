@@ -264,6 +264,15 @@ button:disabled {
   line-height: 1;
 }
 
+.session-platform-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.68rem !important;
+  line-height: 1;
+}
+
 .session-identity span,
 .session-state {
   color: var(--muted);
@@ -361,11 +370,88 @@ button:disabled {
   resize: vertical;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  button:active,
-  .button-link:active {
-    transform: scale(0.98);
-  }
+.platform-picker {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 18px 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #0c0f12;
+}
+
+.platform-picker label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: transform 140ms var(--ease-out), color 140ms ease,
+    background-color 140ms ease;
+}
+
+.platform-picker label.active {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 24%);
+}
+
+.platform-picker input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.platform-picker label:focus-within,
+.install-cmd:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 75%, white);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.setup-instructions {
+  min-height: 458px;
+}
+
+.setup-requirements {
+  min-height: 62px;
+}
+
+.setup-hint {
+  min-height: 22px;
+  margin: 12px 0 0;
+}
+
+.setup-steps {
+  margin-top: 18px;
+}
+
+.setup-footnote {
+  margin-top: 14px;
+}
+
+button:not(:disabled):active,
+.button-link:active,
+.platform-picker label:active {
+  transform: scale(0.98);
 }
 
 @media (max-width: 680px) {
@@ -395,7 +481,9 @@ button:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   button,
-  .button-link {
+  .button-link,
+  .platform-picker label {
     transition: opacity 140ms ease;
+    transform: none;
   }
 }

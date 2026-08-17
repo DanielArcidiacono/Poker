@@ -64,11 +64,13 @@ test("sessions own independent leases, desired state, and streams", async () => 
     );
     await store.heartbeat(firstClient, {
       hostname: "Alpha Mac",
+      platform: "macos",
       product: "Prostar",
       version: "1.0.0",
     });
     await store.heartbeat(secondClient, {
-      hostname: "Beta Mac",
+      hostname: "Beta PC",
+      platform: "windows",
       product: "Prostar",
       version: "1.0.0",
     });
@@ -108,7 +110,11 @@ test("sessions own independent leases, desired state, and streams", async () => 
     assert.equal((await store.getSession(secondClient)).recording, false);
     assert.deepEqual(
       (await store.listSessions()).map((session) => session.hostname),
-      ["Alpha Mac", "Beta Mac"],
+      ["Alpha Mac", "Beta PC"],
+    );
+    assert.deepEqual(
+      (await store.listSessions()).map((session) => session.platform),
+      ["macos", "windows"],
     );
 
     await store.setSharing(firstClient, false, "Stopping sharing…");

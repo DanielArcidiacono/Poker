@@ -41,7 +41,9 @@ const LIVE_STATUS_REPUBLISH_MS = 60_000;
 const CONTROL_PLANE_DISCONNECT_GRACE_MS = 60_000;
 const MAX_START_RETRY_MS = 60_000;
 const PRODUCT_NAME = "Prostar";
-const AGENT_VERSION = "1.1.0";
+const AGENT_VERSION = "1.2.0";
+
+export type AgentPlatform = "macos" | "windows" | "other";
 
 type MacNameReader = (preference: "ComputerName" | "LocalHostName") => string;
 
@@ -57,6 +59,46 @@ export function resolveMacDisplayName(
   reader: MacNameReader = readMacName,
   hostname: () => string = osHostname,
 ): string {
+  return resolveDeviceDisplayName({
+    platform: "darwin",
+    readMacName: reader,
+    hostname,
+  });
+}
+
+type DeviceNameDependencies = {
+  platform?: NodeJS.Platform;
+  readMacName?: MacNameReader;
+  hostname?: () => string;
+  computerName?: () => string | undefined;
+};
+
+export function resolveAgentPlatform(
+  platform: NodeJS.Platform = process.platform,
+): AgentPlatform {
+  if (platform === "darwin") return "macos";
+  if (platform === "win32") return "windows";
+  return "other";
+}
+
+export function resolveDeviceDisplayName(
+  dependencies: DeviceNameDependencies = {},
+): string {
+  const platform = dependencies.platform ?? process.platform;
+  const reader = dependencies.readMacName ?? readMacName;
+  const hostname = dependencies.hostname ?? osHostname;
+
+  if (platform === "win32") {
+    const computerName =
+      (dependencies.computerName ?? (() => process.env.COMPUTERNAME))()
+        ?.trim();
+    return computerName || hostname().trim() || "Windows PC";
+  }
+
+  if (platform !== "darwin") {
+    return hostname().trim() || "Device";
+  }
+
   for (const preference of ["ComputerName", "LocalHostName"] as const) {
     try {
       const value = reader(preference).trim();
@@ -90,7 +132,8 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
   const disconnectGraceMs =
     options.disconnectGraceMs ?? CONTROL_PLANE_DISCONNECT_GRACE_MS;
   const retryBaseMs = options.retryBaseMs ?? 5_000;
-  const host = resolveMacDisplayName();
+  const host = resolveDeviceDisplayName();
+  const platform = resolveAgentPlatform();
   const instanceId = randomUUID();
   const base = options.baseUrl.replace(/\/$/, "");
   let stopped = false;
@@ -128,6 +171,7 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
           ...snapshot,
           clientId: options.clientId,
           hostname: host,
+          platform,
           product: PRODUCT_NAME,
           version: AGENT_VERSION,
           sharingRevision: lastSharingRevision,
@@ -319,6 +363,7 @@ export function startControlPlane(options: Options): ControlPlaneHandle {
       const res = await postJson(`${base}/api/agent/poll`, options.token, {
         clientId: options.clientId,
         hostname: host,
+        platform,
         product: PRODUCT_NAME,
         version: AGENT_VERSION,
         agentInstanceId: instanceId,

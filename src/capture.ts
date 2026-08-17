@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import type sharpModule from "sharp";
+import {
+  createWindowsCaptureBackend,
+  type WindowsCaptureBackend,
+} from "./windows-capture.js";
 
 export type CaptureOptions = {
   fps: number;
@@ -27,6 +31,8 @@ type CaptureDependencies = {
   grabRawFrame?: (options: CaptureOptions) => Promise<Buffer>;
   grabFrame?: (options: CaptureOptions) => Promise<Buffer>;
   now?: () => number;
+  platform?: NodeJS.Platform;
+  windowsCapture?: WindowsCaptureBackend;
 };
 
 const execFileAsync = promisify(execFile);
@@ -108,8 +114,25 @@ export function createCapture(
   dependencies: CaptureDependencies = {},
 ): CaptureController {
   const intervalMs = Math.max(50, Math.round(1000 / options.fps));
-  const captureRaw = dependencies.grabRawFrame ?? grabRawFrame;
-  const captureFrame = dependencies.grabFrame ?? grabFrame;
+  const platform = dependencies.platform ?? process.platform;
+  const windowsCapture =
+    platform === "win32"
+      ? (dependencies.windowsCapture ?? createWindowsCaptureBackend())
+      : null;
+  const captureRaw =
+    dependencies.grabRawFrame ??
+    (windowsCapture
+      ? async (captureOptions: CaptureOptions) => {
+          await windowsCapture.preflight(captureOptions);
+          return Buffer.alloc(0);
+        }
+      : grabRawFrame);
+  const captureFrame =
+    dependencies.grabFrame ??
+    (windowsCapture
+      ? (captureOptions: CaptureOptions) =>
+          windowsCapture.capture(captureOptions)
+      : grabFrame);
   const now = dependencies.now ?? (() => performance.now());
 
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -117,21 +140,24 @@ export function createCapture(
   let busy = false;
   let consecutiveErrors = 0;
   let lastSuccessfulCaptureAt = 0;
+  let generation = 0;
 
-  async function tick(): Promise<void> {
-    if (!running) return;
+  async function tick(currentGeneration: number): Promise<void> {
+    if (!running || currentGeneration !== generation) return;
     if (busy) {
-      timer = setTimeout(() => void tick(), 50);
+      timer = setTimeout(() => void tick(currentGeneration), 50);
       return;
     }
     busy = true;
 
     try {
       const jpeg = await captureFrame(options);
+      if (!running || currentGeneration !== generation) return;
       lastSuccessfulCaptureAt = now();
       consecutiveErrors = 0;
-      if (running) options.onFrame(jpeg);
+      options.onFrame(jpeg);
     } catch (err) {
+      if (!running || currentGeneration !== generation) return;
       consecutiveErrors += 1;
       if (consecutiveErrors <= 3 || consecutiveErrors % 20 === 0) {
         console.error(
@@ -139,20 +165,26 @@ export function createCapture(
           err instanceof Error ? err.message : err,
         );
         if (consecutiveErrors === 1) {
-          console.error(
-            "[capture] If this persists, grant Screen Recording to your Node binary in System Settings → Privacy & Security → Screen Recording, then restart.",
-          );
+          if (platform === "darwin") {
+            console.error(
+              "[capture] If this persists, grant Screen Recording to your Node binary in System Settings → Privacy & Security → Screen Recording, then restart.",
+            );
+          } else if (platform === "win32") {
+            console.error(
+              "[capture] If this persists, unlock the Windows session and verify that an interactive desktop is available.",
+            );
+          }
         }
       }
     } finally {
       busy = false;
-      if (running) {
+      if (running && currentGeneration === generation) {
         const delay =
           consecutiveErrors > 0
             ? Math.min(10000, intervalMs * Math.min(consecutiveErrors, 10))
             : intervalMs;
         timer = setTimeout(() => {
-          void tick();
+          void tick(currentGeneration);
         }, delay);
       }
     }
@@ -174,19 +206,23 @@ export function createCapture(
         lastSuccessfulCaptureAt = now();
       } finally {
         busy = false;
+        if (!running) windowsCapture?.close();
       }
     },
     start() {
       if (running) return;
       running = true;
-      void tick();
+      generation += 1;
+      void tick(generation);
     },
     stop() {
       running = false;
+      generation += 1;
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
+      windowsCapture?.close();
     },
   };
 }
