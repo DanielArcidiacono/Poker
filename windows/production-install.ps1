@@ -394,9 +394,9 @@ function Invoke-FailureCleanup {
 }
 
 try {
-  if (Test-ReparsePoint -LiteralPath $AppRoot -or
-      Test-ReparsePoint -LiteralPath $ReleasesRoot -or
-      Test-ReparsePoint -LiteralPath $SourceRoot) {
+  if ((Test-ReparsePoint -LiteralPath $AppRoot) -or
+      (Test-ReparsePoint -LiteralPath $ReleasesRoot) -or
+      (Test-ReparsePoint -LiteralPath $SourceRoot)) {
     throw "Prostar installation paths must be ordinary directories."
   }
   [void](New-Item -ItemType Directory -Path $AppRoot -Force)

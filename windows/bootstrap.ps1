@@ -280,8 +280,8 @@ try {
     throw "Prostar on Arm64 requires Windows 11 or later."
   }
 
-  if (Test-ReparsePoint -LiteralPath $AppRoot -or
-      Test-ReparsePoint -LiteralPath $ReleasesRoot) {
+  if ((Test-ReparsePoint -LiteralPath $AppRoot) -or
+      (Test-ReparsePoint -LiteralPath $ReleasesRoot)) {
     throw "Prostar installation paths must be ordinary directories."
   }
   [void](New-Item -ItemType Directory -Path $LogsRoot -Force)
