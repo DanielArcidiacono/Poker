@@ -108,8 +108,16 @@ jobs:
             backend.close();
           }
           '@
-          node --input-type=module -e $smoke
-          if ($LASTEXITCODE -ne 0) { throw "The Windows capture worker smoke test failed." }
+          $smokePath = Join-Path $PWD ".prostar-windows-smoke-$PID.mjs"
+          $utf8 = New-Object System.Text.UTF8Encoding -ArgumentList $false
+          [System.IO.File]::WriteAllText($smokePath, $smoke, $utf8)
+          try {
+            node $smokePath
+            if ($LASTEXITCODE -ne 0) { throw "The Windows capture worker smoke test failed." }
+          }
+          finally {
+            Remove-Item -LiteralPath $smokePath -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Smoke-test private Windows runtimes
         if: runner.os == 'Windows'
