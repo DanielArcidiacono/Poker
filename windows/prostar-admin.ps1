@@ -117,6 +117,25 @@ function Get-ProstarTask {
   }
 }
 
+function Resolve-TaskAccountSid {
+  param([string]$Identity)
+  if ([string]::IsNullOrWhiteSpace($Identity)) {
+    return ""
+  }
+  try {
+    $sid = New-Object Security.Principal.SecurityIdentifier($Identity)
+    return $sid.Value
+  } catch {
+    try {
+      $account = New-Object Security.Principal.NTAccount($Identity)
+      $sid = $account.Translate([Security.Principal.SecurityIdentifier])
+      return $sid.Value
+    } catch {
+      return ""
+    }
+  }
+}
+
 function Assert-OwnedTask {
   param($Task)
   if ($null -eq $Task) {
@@ -312,7 +331,7 @@ function Show-Status {
     Write-Output "Task enabled: $([bool]$task.Enabled)"
 
     $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $principalSid = [string]$task.Definition.Principal.UserId
+    $principalSid = Resolve-TaskAccountSid -Identity ([string]$task.Definition.Principal.UserId)
     $logonType = [int]$task.Definition.Principal.LogonType
     $principalMatches = $principalSid.Equals(
       $currentSid,
@@ -337,7 +356,7 @@ function Show-Status {
         continue
       }
       $hasLogonTrigger = $true
-      $triggerSid = [string]$trigger.UserId
+      $triggerSid = Resolve-TaskAccountSid -Identity ([string]$trigger.UserId)
       if ($triggerSid.Equals($currentSid, [StringComparison]::OrdinalIgnoreCase)) {
         $hasMatchingLogonTrigger = $true
         if ([bool]$trigger.Enabled) {

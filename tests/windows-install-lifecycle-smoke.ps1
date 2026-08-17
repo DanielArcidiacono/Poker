@@ -89,6 +89,25 @@ function Get-ProstarTask {
   }
 }
 
+function Resolve-TaskAccountSid {
+  param([string]$Identity)
+  if ([string]::IsNullOrWhiteSpace($Identity)) {
+    return ""
+  }
+  try {
+    $sid = New-Object Security.Principal.SecurityIdentifier($Identity)
+    return $sid.Value
+  } catch {
+    try {
+      $account = New-Object Security.Principal.NTAccount($Identity)
+      $sid = $account.Translate([Security.Principal.SecurityIdentifier])
+      return $sid.Value
+    } catch {
+      return ""
+    }
+  }
+}
+
 function Wait-Health {
   for ($attempt = 0; $attempt -lt 30; $attempt++) {
     try {
@@ -808,7 +827,8 @@ try {
     throw "The Prostar scheduled task is not using the interactive user token."
   }
   $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-  if (-not ([string]$task.Definition.Principal.UserId).Equals(
+  $principalSid = Resolve-TaskAccountSid -Identity ([string]$task.Definition.Principal.UserId)
+  if (-not $principalSid.Equals(
       $currentSid,
       [StringComparison]::OrdinalIgnoreCase
     )) {
@@ -819,7 +839,7 @@ try {
   for ($index = 1; $index -le $triggers.Count; $index++) {
     $trigger = $triggers.Item($index)
     if ([int]$trigger.Type -eq 9 -and
-        ([string]$trigger.UserId).Equals(
+        (Resolve-TaskAccountSid -Identity ([string]$trigger.UserId)).Equals(
           $currentSid,
           [StringComparison]::OrdinalIgnoreCase
         )) {

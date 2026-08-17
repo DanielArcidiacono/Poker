@@ -346,6 +346,8 @@ test("Windows admin diagnostics are cardinality-safe and report task connectivit
   assert.match(admin, /Task enabled:/);
   assert.match(admin, /Task principal:/);
   assert.match(admin, /Sign-in trigger:/);
+  assert.match(admin, /Resolve-TaskAccountSid/);
+  assert.match(admin, /Security\.Principal\.NTAccount/);
   assert.match(admin, /Task last run:/);
   assert.match(admin, /Task last result:.*0x\$lastResultHex/);
   assert.match(admin, /Task missed runs:/);
