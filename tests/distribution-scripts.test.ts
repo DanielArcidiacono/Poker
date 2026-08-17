@@ -182,7 +182,11 @@ test("Windows distribution is pinned, persistent, transactional, and quiet", () 
   assert.match(production, /Invoke-FailureCleanup/);
   assert.match(production, /\$ErrorActionPreference = "Continue"/);
   assert.match(production, /\[IO\.File\]::AppendAllText/);
+  assert.match(production, /\*> \$nativeOutputPath/);
+  assert.match(production, /\$global:LASTEXITCODE = 1/);
+  assert.match(production, /\$exitCode = \$global:LASTEXITCODE/);
   assert.doesNotMatch(production, /\*>> \$InstallLog/);
+  assert.doesNotMatch(production, /2>&1\s*\|/);
   assert.match(production, /\$env:PROSTAR_APP_ROOT = \$AppRoot/);
   assert.match(production, /Phase: verifying Windows screen capture/);
   assert.match(

@@ -181,23 +181,32 @@ function Invoke-LoggedNative {
   )
   $previousErrorActionPreference = $ErrorActionPreference
   $exitCode = 1
+  $nativeOutputPath = Join-Path (Split-Path -Parent $InstallLog) (
+    ".native-output-" + [Guid]::NewGuid().ToString("N") + ".tmp"
+  )
   Push-Location -LiteralPath $WorkingDirectory
   try {
     # Windows PowerShell 5.1 turns redirected native stderr into PowerShell
     # Error records. A warning must not fail a process whose exit code is zero.
-    # Append the records explicitly to keep this otherwise quiet log UTF-8.
+    # It also loses LASTEXITCODE when the native command is upstream in a
+    # pipeline. Redirect directly, capture the exit code immediately, and then
+    # transcode the temporary output into this otherwise quiet UTF-8 log.
     $ErrorActionPreference = "Continue"
-    $LASTEXITCODE = 1
-    & $FilePath @Arguments 2>&1 | ForEach-Object {
-      [IO.File]::AppendAllText(
-        $InstallLog,
-        ([string]$_) + [Environment]::NewLine,
-        $utf8
-      )
+    # LASTEXITCODE is an automatic variable created in global scope. Assigning
+    # it without a scope modifier inside this function would create a local
+    # shadow that the native process cannot update on Windows PowerShell 5.1.
+    $global:LASTEXITCODE = 1
+    & $FilePath @Arguments *> $nativeOutputPath
+    $exitCode = $global:LASTEXITCODE
+    if (Test-Path -LiteralPath $nativeOutputPath -PathType Leaf) {
+      $nativeOutput = [IO.File]::ReadAllText($nativeOutputPath)
+      if ($nativeOutput.Length -gt 0) {
+        [IO.File]::AppendAllText($InstallLog, $nativeOutput, $utf8)
+      }
     }
-    $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
+    Remove-Item -LiteralPath $nativeOutputPath -Force -ErrorAction SilentlyContinue
     Pop-Location
   }
   if ($exitCode -ne 0) {

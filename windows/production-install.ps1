@@ -299,25 +299,34 @@ function Invoke-LoggedNative {
   )
   $previousErrorActionPreference = $ErrorActionPreference
   $exitCode = 1
+  $nativeOutputPath = Join-Path (Split-Path -Parent $InstallLog) (
+    ".native-output-" + [Guid]::NewGuid().ToString("N") + ".tmp"
+  )
   Push-Location -LiteralPath $WorkingDirectory
   try {
     # Windows PowerShell 5.1 promotes redirected native stderr to its Error
     # stream. With ErrorActionPreference=Stop, a harmless npm warning can
-    # otherwise terminate a command that ultimately exits successfully. Keep
-    # the native process authoritative, and append every line ourselves so the
-    # entire install log remains UTF-8.
+    # otherwise terminate a command that ultimately exits successfully. It
+    # also fails to propagate LASTEXITCODE when the native command is upstream
+    # in a pipeline. Redirect the command directly, capture its exit code before
+    # running another command, then transcode PowerShell's temporary output to
+    # the install log's UTF-8 encoding.
     $ErrorActionPreference = "Continue"
-    $LASTEXITCODE = 1
-    & $FilePath @Arguments 2>&1 | ForEach-Object {
-      [IO.File]::AppendAllText(
-        $InstallLog,
-        ([string]$_) + [Environment]::NewLine,
-        $utf8
-      )
+    # LASTEXITCODE is an automatic variable created in global scope. Assigning
+    # it without a scope modifier inside this function would create a local
+    # shadow that the native process cannot update on Windows PowerShell 5.1.
+    $global:LASTEXITCODE = 1
+    & $FilePath @Arguments *> $nativeOutputPath
+    $exitCode = $global:LASTEXITCODE
+    if (Test-Path -LiteralPath $nativeOutputPath -PathType Leaf) {
+      $nativeOutput = [IO.File]::ReadAllText($nativeOutputPath)
+      if ($nativeOutput.Length -gt 0) {
+        [IO.File]::AppendAllText($InstallLog, $nativeOutput, $utf8)
+      }
     }
-    $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousErrorActionPreference
+    Remove-Item -LiteralPath $nativeOutputPath -Force -ErrorAction SilentlyContinue
     Pop-Location
   }
   if ($exitCode -ne 0) {

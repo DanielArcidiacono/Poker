@@ -147,7 +147,7 @@ function Assert-LoggedNativeImplementation {
   try {
     [IO.File]::WriteAllText($InstallLog, "", $utf8)
     Invoke-LoggedNative -FilePath $cmd -Arguments @(
-      "/d", "/s", "/c", "echo benign stderr 1>&2 & exit /b 0"
+      "/d", "/s", "/c", "echo benign stdout & echo benign stderr 1>&2 & exit /b 0"
     ) -WorkingDirectory $RepositoryRoot -Description "$Label benign-stderr probe"
 
     $threw = $false
@@ -167,11 +167,16 @@ function Assert-LoggedNativeImplementation {
 
     $bytes = [IO.File]::ReadAllBytes($InstallLog)
     $text = $strictUtf8.GetString($bytes)
-    if ($text -notmatch "benign stderr" -or $text -notmatch "fatal stderr") {
-      throw "$Label did not append native stderr to the install log."
+    if ($text -notmatch "benign stdout" -or
+        $text -notmatch "benign stderr" -or
+        $text -notmatch "fatal stderr") {
+      throw "$Label did not append native stdout and stderr to the install log."
     }
     if ($bytes -contains [byte]0) {
       throw "$Label wrote mixed UTF-8 and UTF-16 data to the install log."
+    }
+    if (@(Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Filter ".native-output-*.tmp").Count -gt 0) {
+      throw "$Label retained a native-output staging file."
     }
   } finally {
     Remove-Item -LiteralPath $InstallLog -Force -ErrorAction SilentlyContinue
