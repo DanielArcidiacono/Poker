@@ -67,7 +67,6 @@ export default async function WatchRoute({ params, searchParams }: Props) {
           publicUrl={publicUrl}
           readyPath={`${watchPath}?ready=${encodeURIComponent(generation)}`}
           sessionName={session.hostname || "Prostar"}
-          watchPath={watchPath}
         />
       </main>
     );
@@ -85,9 +84,9 @@ export default async function WatchRoute({ params, searchParams }: Props) {
   return (
     <main className="shell">
       <WatchWait
+        actionPath={watchPath}
         detail={detail}
         sessionName={session.hostname || "Prostar"}
-        watchPath={watchPath}
       />
     </main>
   );
