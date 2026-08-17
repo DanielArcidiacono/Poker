@@ -348,11 +348,24 @@ try {
     throw "A Prostar process reappeared; no application data was deleted."
   }
 
-  Set-Location -LiteralPath ([IO.Path]::GetTempPath())
+  # The uninstaller may have been launched with its own release directory as
+  # the process working directory. PowerShell's provider location and the
+  # process working directory are distinct on Windows; move both before
+  # deleting the release that contains this script.
+  $outsideDirectory = [IO.Path]::GetFullPath($LocalAppData)
+  Set-Location -LiteralPath $outsideDirectory
+  [Environment]::CurrentDirectory = $outsideDirectory
+  $normalizedWorkingDirectory = ([IO.Path]::GetFullPath([Environment]::CurrentDirectory)).TrimEnd("\")
+  $normalizedAppRoot = ([IO.Path]::GetFullPath($AppRoot)).TrimEnd("\")
+  if ($normalizedWorkingDirectory -ieq $normalizedAppRoot -or
+      $normalizedWorkingDirectory.StartsWith($normalizedAppRoot + "\", [StringComparison]::OrdinalIgnoreCase)) {
+    throw "The uninstaller could not leave the Prostar application directory."
+  }
   if (Test-Path -LiteralPath $AppRoot) {
     Remove-Item -LiteralPath $AppRoot -Recurse -Force
   }
   Write-Output "Removed Prostar and all of its private data."
+  exit 0
 } catch {
   [Console]::Error.WriteLine("Error: " + $_.Exception.Message)
   exit 1

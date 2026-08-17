@@ -246,7 +246,29 @@ test("Windows full uninstall fails closed and stops every owned process class", 
     script,
     /Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/,
   );
+  assert.match(script, /\[Environment\]::CurrentDirectory = \$outsideDirectory/);
+  const leaveApplicationDirectory = script.indexOf(
+    "[Environment]::CurrentDirectory = $outsideDirectory",
+  );
+  const deleteApplicationDirectory = script.indexOf(
+    "Remove-Item -LiteralPath $AppRoot -Recurse -Force",
+  );
+  assert.ok(
+    leaveApplicationDirectory >= 0 &&
+      deleteApplicationDirectory > leaveApplicationDirectory,
+    "the uninstaller must leave its process working directory before deleting AppRoot",
+  );
+  assert.match(script, /could not leave the Prostar application directory/);
+  assert.match(script, /Removed Prostar and all of its private data\."\s*exit 0/);
   assert.doesNotMatch(script, /\btaskkill\b|Stop-Process\s+-Name/i);
+});
+
+test("Windows admin layers propagate explicit script exit codes", () => {
+  const admin = readFileSync("windows/prostar-admin.ps1", "utf8");
+  const installer = readFileSync("windows/install-agent.ps1", "utf8");
+  assert.match(admin, /& \$uninstaller -Purge\s*exit \$LASTEXITCODE/);
+  assert.match(admin, /}\s*catch \{[\s\S]*exit 1\s*}\s*exit 0\s*$/);
+  assert.match(installer, /& \$script @Arguments\s*exit \$LASTEXITCODE/);
 });
 
 test("public Windows bootstrap is pinned, local-only, transactional, and quiet", () => {

@@ -421,8 +421,7 @@ try {
   Wait-Health
   Assert-CapturePreflight
 
-  $uninstaller = Join-Path $ReleaseRoot "windows\uninstall-agent.ps1"
-  Invoke-PowerShellScript -ScriptPath $uninstaller -ScriptArguments @("-Purge") -Description "Windows full uninstall"
+  Invoke-PowerShellScript -ScriptPath $admin -ScriptArguments @("uninstall") -Description "Windows admin full uninstall"
   if ($null -ne (Get-ProstarTask)) {
     throw "The Windows uninstaller left the Prostar scheduled task registered."
   }

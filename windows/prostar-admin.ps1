@@ -410,9 +410,7 @@ try {
         throw "The Prostar uninstaller is unavailable."
       }
       & $uninstaller -Purge
-      if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-      }
+      exit $LASTEXITCODE
     }
     default {
       [Console]::Error.WriteLine((Show-Usage | Out-String).TrimEnd())
@@ -423,3 +421,4 @@ try {
   [Console]::Error.WriteLine("Error: " + $_.Exception.Message)
   exit 1
 }
+exit 0
