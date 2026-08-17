@@ -53,6 +53,7 @@ $KeepRelease = $false
 $InstallSucceeded = $false
 $AgentSecret = ""
 $ViewerPassword = ""
+$LastLocalStatusError = ""
 
 function Write-InstallLog {
   param([Parameter(Mandatory = $true)][string]$Message)
@@ -201,7 +202,7 @@ function Invoke-ProstarHttp {
   $request.Timeout = $TimeoutMilliseconds
   $request.ReadWriteTimeout = $TimeoutMilliseconds
   $request.AllowAutoRedirect = $false
-  $request.UserAgent = "Prostar-Windows-Installer/1.2.0"
+  $request.UserAgent = "Prostar-Windows-Installer/1.2.1"
   if (-not [string]::IsNullOrWhiteSpace($Bearer)) {
     $request.Headers["Authorization"] = "Bearer $Bearer"
   }
@@ -296,11 +297,27 @@ function Invoke-LoggedNative {
     [Parameter(Mandatory = $true)][string]$WorkingDirectory,
     [Parameter(Mandatory = $true)][string]$Description
   )
+  $previousErrorActionPreference = $ErrorActionPreference
+  $exitCode = 1
   Push-Location -LiteralPath $WorkingDirectory
   try {
-    & $FilePath @Arguments *>> $InstallLog
+    # Windows PowerShell 5.1 promotes redirected native stderr to its Error
+    # stream. With ErrorActionPreference=Stop, a harmless npm warning can
+    # otherwise terminate a command that ultimately exits successfully. Keep
+    # the native process authoritative, and append every line ourselves so the
+    # entire install log remains UTF-8.
+    $ErrorActionPreference = "Continue"
+    $LASTEXITCODE = 1
+    & $FilePath @Arguments 2>&1 | ForEach-Object {
+      [IO.File]::AppendAllText(
+        $InstallLog,
+        ([string]$_) + [Environment]::NewLine,
+        $utf8
+      )
+    }
     $exitCode = $LASTEXITCODE
   } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     Pop-Location
   }
   if ($exitCode -ne 0) {
@@ -332,6 +349,7 @@ function Wait-LocalStatus {
     [int]$ExpectedStatus = 204,
     [int]$Attempts = 20
   )
+  $script:LastLocalStatusError = ""
   for ($attempt = 0; $attempt -lt $Attempts; $attempt++) {
     $request = [Net.HttpWebRequest]::Create("http://127.0.0.1:8787$Path")
     $request.Method = $Method
@@ -352,7 +370,30 @@ function Wait-LocalStatus {
       }
     } catch [Net.WebException] {
       if ($_.Exception.Response) {
-        $_.Exception.Response.Dispose()
+        $errorResponse = $_.Exception.Response
+        try {
+          $reader = New-Object IO.StreamReader($errorResponse.GetResponseStream())
+          try {
+            $body = $reader.ReadToEnd()
+            if (-not [string]::IsNullOrWhiteSpace($body)) {
+              try {
+                $parsed = $body | ConvertFrom-Json
+                $detail = [string]$parsed.error
+              } catch {
+                $detail = $body
+              }
+              $detail = ($detail -replace "[\r\n]+", " ").Trim()
+              if ($detail.Length -gt 500) {
+                $detail = $detail.Substring(0, 500)
+              }
+              $script:LastLocalStatusError = $detail
+            }
+          } finally {
+            $reader.Dispose()
+          }
+        } finally {
+          $errorResponse.Dispose()
+        }
       }
     }
     Start-Sleep -Seconds 1
@@ -425,6 +466,7 @@ try {
     $ReleasePath = $null
   }
 
+  Write-InstallLog "Phase: validating dashboard enrollment."
   Remove-PendingEnrollment
   $dashboardStatus = Invoke-ProstarHttp -Method "GET" -Path "/"
   if ($dashboardStatus -ne 200) {
@@ -491,12 +533,25 @@ try {
     throw "The downloaded Prostar package is incomplete."
   }
 
+  Write-InstallLog "Phase: installing private runtimes."
   $ensureRuntime = Join-Path $ReleasePath "windows\ensure-runtime.ps1"
   $powerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-  Invoke-LoggedNative -FilePath $powerShell -Arguments @(
-    "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-    "-File", $ensureRuntime, "-WithCloudflared"
-  ) -WorkingDirectory $ReleasePath -Description "Private runtime installation"
+  $previousAppRootOverride = [string]$env:PROSTAR_APP_ROOT
+  try {
+    # The production layout is fixed. Do not let an unrelated user or CI
+    # environment override send the runtime to a different directory.
+    $env:PROSTAR_APP_ROOT = $AppRoot
+    Invoke-LoggedNative -FilePath $powerShell -Arguments @(
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", $ensureRuntime, "-WithCloudflared"
+    ) -WorkingDirectory $ReleasePath -Description "Private runtime installation"
+  } finally {
+    if ([string]::IsNullOrEmpty($previousAppRootOverride)) {
+      Remove-Item Env:PROSTAR_APP_ROOT -ErrorAction SilentlyContinue
+    } else {
+      $env:PROSTAR_APP_ROOT = $previousAppRootOverride
+    }
+  }
 
   $nodeId = ([IO.File]::ReadAllText((Join-Path $RuntimeRoot "node-current.txt"))).Trim()
   $cloudflaredId = ([IO.File]::ReadAllText((Join-Path $RuntimeRoot "cloudflared-current.txt"))).Trim()
@@ -525,6 +580,7 @@ try {
   ) -join [Environment]::NewLine
   [IO.File]::WriteAllText((Join-Path $ReleasePath ".env"), $envContents + [Environment]::NewLine, $utf8)
 
+  Write-InstallLog "Phase: installing and building the agent."
   $env:npm_config_cache = Join-Path $RuntimeRoot "npm-cache"
   $env:npm_config_update_notifier = "false"
   [void](New-Item -ItemType Directory -Path $env:npm_config_cache -Force)
@@ -535,17 +591,30 @@ try {
     "run", "build", "--silent"
   ) -WorkingDirectory $ReleasePath -Description "Agent build"
 
+  Write-InstallLog "Phase: starting the background task."
   Invoke-AgentInstaller -Arguments @()
   $HandoffStarted = $true
 
+  Write-InstallLog "Phase: verifying local health and dashboard pairing."
   if (-not (Wait-LocalStatus -Path "/api/health" -ExpectedStatus 200 -Attempts 20)) {
     throw "The local Prostar agent did not become healthy."
   }
   if (-not (Wait-LocalStatus -Path "/api/control-plane/health" -Bearer $AgentSecret -ExpectedStatus 204 -Attempts 100)) {
-    throw "The Windows agent could not acquire its dashboard session."
+    $detail = if ([string]::IsNullOrWhiteSpace($LastLocalStatusError)) {
+      ""
+    } else {
+      " ($LastLocalStatusError)"
+    }
+    throw "The Windows agent could not acquire its dashboard session$detail."
   }
+  Write-InstallLog "Phase: verifying Windows screen capture."
   if (-not (Wait-LocalStatus -Path "/api/capture/preflight" -Method "POST" -Bearer $AgentSecret -ExpectedStatus 204 -Attempts 3)) {
-    throw "Windows screen capture is unavailable in the current user session."
+    $detail = if ([string]::IsNullOrWhiteSpace($LastLocalStatusError)) {
+      ""
+    } else {
+      " ($LastLocalStatusError)"
+    }
+    throw "Windows screen capture is unavailable in the current user session$detail."
   }
 
   if ($EnrolledNewIdentity) {

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Repository = "DanielArcidiacono/Poker",
-  [string]$Ref = "v1.2.0",
+  [string]$Ref = "v1.2.1",
   [string]$ViewerPassword = ""
 )
 
@@ -10,12 +10,14 @@ $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 $InstallSucceeded = $false
+$FailureMessage = ""
 $StagingRoot = $null
 $ReleasePath = $null
 $SetupLock = $null
 $HandoffStarted = $false
 $KeepRelease = $false
 $AgentSecret = ""
+$LastCaptureError = ""
 
 $LocalAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 $AppRoot = [IO.Path]::GetFullPath((Join-Path $LocalAppData "Prostar"))
@@ -177,11 +179,25 @@ function Invoke-LoggedNative {
     [Parameter(Mandatory = $true)][string]$WorkingDirectory,
     [Parameter(Mandatory = $true)][string]$Description
   )
+  $previousErrorActionPreference = $ErrorActionPreference
+  $exitCode = 1
   Push-Location -LiteralPath $WorkingDirectory
   try {
-    & $FilePath @Arguments *>> $InstallLog
+    # Windows PowerShell 5.1 turns redirected native stderr into PowerShell
+    # Error records. A warning must not fail a process whose exit code is zero.
+    # Append the records explicitly to keep this otherwise quiet log UTF-8.
+    $ErrorActionPreference = "Continue"
+    $LASTEXITCODE = 1
+    & $FilePath @Arguments 2>&1 | ForEach-Object {
+      [IO.File]::AppendAllText(
+        $InstallLog,
+        ([string]$_) + [Environment]::NewLine,
+        $utf8
+      )
+    }
     $exitCode = $LASTEXITCODE
   } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
     Pop-Location
   }
   if ($exitCode -ne 0) {
@@ -205,6 +221,7 @@ function Invoke-AgentInstaller {
 
 function Test-CapturePreflight {
   param([Parameter(Mandatory = $true)][string]$Bearer)
+  $script:LastCaptureError = ""
   $request = [Net.HttpWebRequest]::Create("http://127.0.0.1:8787/api/capture/preflight")
   $request.Method = "POST"
   $request.Timeout = 20000
@@ -220,7 +237,29 @@ function Test-CapturePreflight {
     }
   } catch [Net.WebException] {
     if ($_.Exception.Response) {
-      $_.Exception.Response.Dispose()
+      $errorResponse = $_.Exception.Response
+      try {
+        $reader = New-Object IO.StreamReader($errorResponse.GetResponseStream())
+        try {
+          $body = $reader.ReadToEnd()
+          if (-not [string]::IsNullOrWhiteSpace($body)) {
+            try {
+              $detail = [string](($body | ConvertFrom-Json).error)
+            } catch {
+              $detail = $body
+            }
+            $detail = ($detail -replace "[\r\n]+", " ").Trim()
+            if ($detail.Length -gt 500) {
+              $detail = $detail.Substring(0, 500)
+            }
+            $script:LastCaptureError = $detail
+          }
+        } finally {
+          $reader.Dispose()
+        }
+      } finally {
+        $errorResponse.Dispose()
+      }
     }
     return $false
   }
@@ -365,10 +404,20 @@ try {
   }
 
   $powerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-  Invoke-LoggedNative -FilePath $powerShell -Arguments @(
-    "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-    "-File", (Join-Path $ReleasePath "windows\ensure-runtime.ps1"), "-NodeOnly"
-  ) -WorkingDirectory $ReleasePath -Description "Private Node.js runtime installation"
+  $previousAppRootOverride = [string]$env:PROSTAR_APP_ROOT
+  try {
+    $env:PROSTAR_APP_ROOT = $AppRoot
+    Invoke-LoggedNative -FilePath $powerShell -Arguments @(
+      "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", (Join-Path $ReleasePath "windows\ensure-runtime.ps1"), "-NodeOnly"
+    ) -WorkingDirectory $ReleasePath -Description "Private Node.js runtime installation"
+  } finally {
+    if ([string]::IsNullOrEmpty($previousAppRootOverride)) {
+      Remove-Item Env:PROSTAR_APP_ROOT -ErrorAction SilentlyContinue
+    } else {
+      $env:PROSTAR_APP_ROOT = $previousAppRootOverride
+    }
+  }
 
   $nodeId = ([IO.File]::ReadAllText((Join-Path $RuntimeRoot "node-current.txt"))).Trim()
   if ($nodeId -notmatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") {
@@ -405,12 +454,21 @@ try {
   Invoke-AgentInstaller -TargetRelease $ReleasePath -Arguments @()
   $HandoffStarted = $true
   if (-not (Test-CapturePreflight -Bearer $AgentSecret)) {
-    throw "Windows screen capture is unavailable in the current user session."
+    $detail = if ([string]::IsNullOrWhiteSpace($LastCaptureError)) {
+      ""
+    } else {
+      " ($LastCaptureError)"
+    }
+    throw "Windows screen capture is unavailable in the current user session$detail."
   }
   Invoke-AgentInstaller -TargetRelease $ReleasePath -Arguments @("-FinalizeInstall")
   $InstallSucceeded = $true
   Write-InstallLog "Local-only Prostar Windows installation completed successfully."
 } catch {
+  $FailureMessage = ([string]$_.Exception.Message -replace "[\r\n]+", " ").Trim()
+  if ($FailureMessage.Length -gt 300) {
+    $FailureMessage = $FailureMessage.Substring(0, 300)
+  }
   if (Test-Path -LiteralPath $LogsRoot -PathType Container) {
     Write-InstallLog ("Installation failed: " + $_.Exception.ToString())
   }
@@ -435,5 +493,9 @@ if ($InstallSucceeded) {
   Write-Output "Prostar installed successfully."
   exit 0
 }
-[Console]::Error.WriteLine("Prostar installation failed. See " + $InstallLog)
+[Console]::Error.WriteLine(
+  "Prostar installation failed" +
+    $(if ([string]::IsNullOrWhiteSpace($FailureMessage)) { "." } else { ": " + $FailureMessage })
+)
+[Console]::Error.WriteLine("Details: " + $InstallLog)
 exit 1

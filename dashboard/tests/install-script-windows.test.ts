@@ -30,6 +30,10 @@ test("generated Windows installer is quiet, scoped, and self-contained", () => {
   assert.match(script, /tar\.exe/);
   assert.match(script, /windows\\production-install\.ps1/);
   assert.match(script, /@installArguments \*> \$null/);
+  assert.match(script, /tarListExitCode/);
+  assert.match(script, /tarExtractExitCode/);
+  assert.match(script, /Details: /);
+  assert.match(script, /\$FailureMessage/);
   assert.match(script, /%LOCALAPPDATA%|LocalApplicationData/);
   assert.doesNotMatch(script, /\bwinget\b|\bchoco\b|\bscoop\b|\bnpm install -g\b/i);
   assert.doesNotMatch(script, /\\\s*$/m);

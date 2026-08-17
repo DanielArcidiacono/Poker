@@ -17,6 +17,7 @@ $ControlPlaneBase64 = "${controlPlaneBase64}"
 $ClientId = "${opts.clientId}"
 $InstallTokenBase64 = "${installTokenBase64}"
 $InstallSucceeded = $false
+$FailureMessage = ""
 $StagingRoot = $null
 $SetupLock = $null
 
@@ -162,8 +163,19 @@ try {
   if (-not (Test-Path -LiteralPath $tarPath -PathType Leaf)) {
     throw "Windows tar.exe is unavailable."
   }
-  $entries = @(& $tarPath -tzf $archivePath 2>&1)
-  if ($LASTEXITCODE -ne 0 -or $entries.Count -eq 0) {
+  $tarErrorPath = Join-Path $StagingRoot "tar-error.log"
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    # Windows PowerShell 5.1 treats redirected native stderr as a PowerShell
+    # error. tar.exe's exit code remains authoritative.
+    $ErrorActionPreference = "Continue"
+    $LASTEXITCODE = 1
+    $entries = @(& $tarPath -tzf $archivePath 2> $tarErrorPath)
+    $tarListExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  if ($tarListExitCode -ne 0 -or $entries.Count -eq 0) {
     throw "The downloaded Prostar package could not be inspected."
   }
   foreach ($rawEntry in $entries) {
@@ -178,8 +190,16 @@ try {
       }
     }
   }
-  & $tarPath -xzf $archivePath -C $extracted *> $null
-  if ($LASTEXITCODE -ne 0) {
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $LASTEXITCODE = 1
+    & $tarPath -xzf $archivePath -C $extracted > $null 2> $tarErrorPath
+    $tarExtractExitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  if ($tarExtractExitCode -ne 0) {
     throw "The downloaded Prostar package could not be extracted."
   }
   $productionInstaller = Join-Path $extracted "windows\production-install.ps1"
@@ -197,6 +217,10 @@ try {
   & $productionInstaller @installArguments *> $null
   $InstallSucceeded = $true
 } catch {
+  $FailureMessage = ([string]$_.Exception.Message -replace "[\r\n]+", " ").Trim()
+  if ($FailureMessage.Length -gt 300) {
+    $FailureMessage = $FailureMessage.Substring(0, 300)
+  }
   Write-InstallFailure -ErrorRecord $_
 } finally {
   $InstallTokenBase64 = ""
@@ -217,7 +241,11 @@ if ($InstallSucceeded) {
   Write-Output "Prostar installed successfully."
   exit 0
 }
-[Console]::Error.WriteLine("Prostar installation failed. See " + $InstallLog)
+[Console]::Error.WriteLine(
+  "Prostar installation failed" +
+    $(if ([string]::IsNullOrWhiteSpace($FailureMessage)) { "." } else { ": " + $FailureMessage })
+)
+[Console]::Error.WriteLine("Details: " + $InstallLog)
 exit 1
 `;
 }

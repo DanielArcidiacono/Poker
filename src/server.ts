@@ -193,11 +193,13 @@ app.post("/api/capture/preflight", async (req, res) => {
     await capture.preflight();
     res.status(204).end();
   } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Screen Recording permission is unavailable";
+    console.error(`[capture] preflight failed: ${message}`);
     res.status(503).json({
-      error:
-        error instanceof Error
-          ? error.message
-          : "Screen Recording permission is unavailable",
+      error: message,
     });
   }
 });

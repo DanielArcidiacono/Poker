@@ -246,11 +246,19 @@ function Get-IdentityFromFile {
     ControlPlane = Get-EnvValueFromFile -FilePath $FilePath -Key "CONTROL_PLANE_URL"
     ClientId = Get-EnvValueFromFile -FilePath $FilePath -Key "PROSTAR_CLIENT_ID"
     Secret = Get-EnvValueFromFile -FilePath $FilePath -Key "PROSTAR_AGENT_SECRET"
+    LocalOnly =
+      (Get-EnvValueFromFile -FilePath $FilePath -Key "AUTO_TUNNEL") -eq "0" -and
+      [string]::IsNullOrWhiteSpace(
+        (Get-EnvValueFromFile -FilePath $FilePath -Key "CONTROL_PLANE_URL")
+      )
   }
 }
 
 function Invoke-Deenroll {
   param([Parameter(Mandatory = $true)]$Identity)
+  if ([bool]$Identity.LocalOnly) {
+    return
+  }
   if ([string]::IsNullOrWhiteSpace($Identity.ControlPlane) -and
       [string]::IsNullOrWhiteSpace($Identity.ClientId) -and
       [string]::IsNullOrWhiteSpace($Identity.Secret)) {

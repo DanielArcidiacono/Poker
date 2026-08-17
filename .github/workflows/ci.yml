@@ -74,7 +74,11 @@ jobs:
           if ($PSVersionTable.PSVersion.Major -ne 5) {
             throw "Expected Windows PowerShell 5.1, found $($PSVersionTable.PSVersion)."
           }
-          Get-ChildItem -LiteralPath windows -Filter *.ps1 | ForEach-Object {
+          $scripts = @(
+            Get-ChildItem -LiteralPath windows -Filter *.ps1
+            Get-Item -LiteralPath tests\windows-install-lifecycle-smoke.ps1
+          )
+          $scripts | ForEach-Object {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -88,22 +92,31 @@ jobs:
             }
           }
 
-      - name: Compile and start the Windows capture worker
+      - name: Exercise the native Windows capture worker
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           $smoke = @'
           import { createWindowsCaptureBackend } from "./dist/windows-capture.js";
+          import sharp from "sharp";
 
           const backend = createWindowsCaptureBackend({ timeoutMs: 30_000 });
+          let probeSucceeded = false;
           try {
             await backend.preflight({ jpegQuality: 60, scale: 0.5, maxWidth: 1920 });
+            probeSucceeded = true;
+            const jpeg = await backend.capture({ jpegQuality: 60, scale: 0.5, maxWidth: 1920 });
+            const metadata = await sharp(jpeg).metadata();
+            if (metadata.format !== "jpeg" || !metadata.width || !metadata.height) {
+              throw new Error(`Native capture returned an invalid image: ${JSON.stringify(metadata)}`);
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             // GitHub-hosted runners may not expose an interactive desktop. A
-            // typed capture error still proves C# initialization and the full
-            // production request/response protocol; every other error fails CI.
-            if (!message.startsWith("capture_failed: ")) throw error;
+            // typed probe error still proves C# initialization and the request
+            // protocol. Once the GDI probe succeeds, JPEG capture must also work.
+            if (probeSucceeded || !message.startsWith("capture_failed: ")) throw error;
+            console.log(`::notice title=Native Windows capture unavailable::${message}`);
           } finally {
             backend.close();
           }
@@ -132,3 +145,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "The private Node.js runtime failed." }
           & (Join-Path $runtime "$cloudflaredId\cloudflared.exe") --version
           if ($LASTEXITCODE -ne 0) { throw "The private cloudflared runtime failed." }
+
+      - name: Smoke-test the installed Windows task lifecycle
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: '& .\tests\windows-install-lifecycle-smoke.ps1'
+
+      - name: Upload Windows lifecycle logs
+        if: failure() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-install-lifecycle-logs
+          path: ${{ runner.temp }}/prostar-lifecycle-logs
+          if-no-files-found: ignore

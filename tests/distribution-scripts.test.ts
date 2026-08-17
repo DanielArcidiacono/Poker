@@ -66,7 +66,7 @@ test("the production agent archive bundles both platform integrations", () => {
 
 test("public bootstrap is pinned, local-only, and quiet", () => {
   const script = readFileSync("scripts/bootstrap.sh", "utf8");
-  assert.match(script, /PROSTAR_REF:-v1\.2\.0/);
+  assert.match(script, /PROSTAR_REF:-v1\.2\.1/);
   assert.match(script, /'AUTO_TUNNEL=0'/);
   assert.match(script, /'CONTROL_PLANE_URL='/);
   assert.doesNotMatch(script, /cloudflared/);
@@ -180,6 +180,11 @@ test("Windows distribution is pinned, persistent, transactional, and quiet", () 
   assert.match(production, /-WithCloudflared/);
   assert.match(production, /npm_config_cache/);
   assert.match(production, /Invoke-FailureCleanup/);
+  assert.match(production, /\$ErrorActionPreference = "Continue"/);
+  assert.match(production, /\[IO\.File\]::AppendAllText/);
+  assert.doesNotMatch(production, /\*>> \$InstallLog/);
+  assert.match(production, /\$env:PROSTAR_APP_ROOT = \$AppRoot/);
+  assert.match(production, /Phase: verifying Windows screen capture/);
   assert.match(
     production,
     /Write-AtomicText -LiteralPath \$PendingIdentity -Value \$contents/,
@@ -231,12 +236,14 @@ test("Windows full uninstall fails closed and stops every owned process class", 
   assert.match(script, /Get-OwnedProstarProcesses\)\.Count -gt 0/);
   assert.match(script, /api\/agent\/deenroll/);
   assert.match(script, /status -ne 204/);
+  assert.match(script, /LocalOnly/);
+  assert.match(script, /AUTO_TUNNEL/);
   assert.doesNotMatch(script, /\btaskkill\b|Stop-Process\s+-Name/i);
 });
 
 test("public Windows bootstrap is pinned, local-only, transactional, and quiet", () => {
   const script = readFileSync("windows/bootstrap.ps1", "utf8");
-  assert.match(script, /\[string\]\$Ref = "v1\.2\.0"/);
+  assert.match(script, /\[string\]\$Ref = "v1\.2\.1"/);
   assert.match(script, /"AUTO_TUNNEL=0"/);
   assert.match(script, /"CONTROL_PLANE_URL="/);
   assert.match(script, /-NodeOnly/);
@@ -255,6 +262,8 @@ test("public Windows bootstrap is pinned, local-only, transactional, and quiet",
   );
   assert.equal(script.match(/Prostar installed successfully\./g)?.length, 1);
   assert.equal(script.match(/Write-Output/g)?.length, 1);
+  assert.match(script, /\$FailureMessage/);
+  assert.match(script, /Details: /);
 });
 
 test("Windows launcher cleans exact child processes across hard Node crashes", () => {
