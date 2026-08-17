@@ -45,7 +45,7 @@ function Test-SameProcess {
 
 function Get-OrphanedChildProcesses {
   $result = New-Object System.Collections.ArrayList
-  foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)) {
+  foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
     $path = [string]$process.ExecutablePath
     if ([string]::IsNullOrWhiteSpace($path)) {
       continue

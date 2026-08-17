@@ -195,7 +195,7 @@ function Get-OwnedProstarProcesses {
   $powerShellPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"))
   $launcherPath = Join-Path $AppRoot "prostar-launcher.cmd"
   $cmdPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
-  foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)) {
+  foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
     $path = [string]$process.ExecutablePath
     if ([string]::IsNullOrWhiteSpace($path)) {
       continue
@@ -318,9 +318,11 @@ function Show-Status {
 function Show-Logs {
   param([string]$Option)
   $paths = @(
-    (Join-Path $LogsRoot "prostar.out.log"),
-    (Join-Path $LogsRoot "prostar.err.log")
-  ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+    @(
+      (Join-Path $LogsRoot "prostar.out.log"),
+      (Join-Path $LogsRoot "prostar.err.log")
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+  )
   if ($paths.Count -eq 0) {
     Write-Output "No Prostar logs exist yet in $LogsRoot."
     return

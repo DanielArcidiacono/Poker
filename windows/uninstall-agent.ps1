@@ -143,7 +143,9 @@ function Get-OwnedProstarProcesses {
   $captureSuffix = "\windows\capture-worker.ps1"
   $powerShellPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"))
   $cmdPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
-  foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue)) {
+  # A failed full process inventory must never be mistaken for "nothing is
+  # running" during a destructive purge.
+  foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
     $path = [string]$process.ExecutablePath
     if ([string]::IsNullOrWhiteSpace($path)) {
       continue
@@ -342,7 +344,7 @@ try {
     Assert-OwnedTask -Task $task
     $service.GetFolder("\").DeleteTask($TaskName, 0)
   }
-  if ((Get-OwnedProstarProcesses).Count -gt 0) {
+  if (@(Get-OwnedProstarProcesses).Count -gt 0) {
     throw "A Prostar process reappeared; no application data was deleted."
   }
 

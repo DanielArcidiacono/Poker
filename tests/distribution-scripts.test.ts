@@ -237,11 +237,15 @@ test("Windows full uninstall fails closed and stops every owned process class", 
   assert.match(script, /capture-worker\.ps1/);
   assert.match(script, /cloudflared\.exe|RuntimeRoot/);
   assert.match(script, /prostar-launcher\.cmd/);
-  assert.match(script, /Get-OwnedProstarProcesses\)\.Count -gt 0/);
+  assert.match(script, /@\(Get-OwnedProstarProcesses\)\.Count -gt 0/);
   assert.match(script, /api\/agent\/deenroll/);
   assert.match(script, /status -ne 204/);
   assert.match(script, /LocalOnly/);
   assert.match(script, /AUTO_TUNNEL/);
+  assert.match(
+    script,
+    /Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/,
+  );
   assert.doesNotMatch(script, /\btaskkill\b|Stop-Process\s+-Name/i);
 });
 
@@ -281,5 +285,9 @@ test("Windows launcher cleans exact child processes across hard Node crashes", (
   assert.match(cleanup, /capture-worker\.ps1/);
   assert.match(cleanup, /CreationDate/);
   assert.match(cleanup, /Test-SameProcess/);
+  assert.match(
+    cleanup,
+    /Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/,
+  );
   assert.doesNotMatch(cleanup, /Stop-Process\s+-Name|\btaskkill\b/i);
 });

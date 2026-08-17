@@ -174,7 +174,7 @@ function Get-OwnedProstarProcesses {
   $captureSuffix = "\windows\capture-worker.ps1"
   $powerShellPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"))
   $cmdPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
-  $all = Get-CimInstance -ClassName Win32_Process -ErrorAction SilentlyContinue
+  $all = Get-CimInstance -ClassName Win32_Process -ErrorAction Stop
   foreach ($process in @($all)) {
     $path = [string]$process.ExecutablePath
     if ([string]::IsNullOrWhiteSpace($path)) {
