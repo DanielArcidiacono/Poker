@@ -66,7 +66,7 @@ test("the production agent archive bundles both platform integrations", () => {
 
 test("public bootstrap is pinned, local-only, and quiet", () => {
   const script = readFileSync("scripts/bootstrap.sh", "utf8");
-  assert.match(script, /PROSTAR_REF:-v1\.2\.2/);
+  assert.match(script, /PROSTAR_REF:-v1\.2\.3/);
   assert.match(script, /'AUTO_TUNNEL=0'/);
   assert.match(script, /'CONTROL_PLANE_URL='/);
   assert.doesNotMatch(script, /cloudflared/);
@@ -258,6 +258,47 @@ test("Windows directory hardening writes only the DACL through DirectoryInfo", (
   }
 });
 
+test("Windows dependency scripts use only the private Node.js runtime", () => {
+  for (const scriptPath of [
+    "windows/production-install.ps1",
+    "windows/bootstrap.ps1",
+  ]) {
+    const script = readFileSync(scriptPath, "utf8");
+    assert.match(script, /\$nodeRuntimePath = \[IO\.Path\]::GetFullPath/);
+    assert.match(
+      script,
+      /Test-ReparsePoint -LiteralPath \$nodeRuntimePath/,
+      `${scriptPath} must reject a linked private runtime`,
+    );
+    assert.match(
+      script,
+      /\$nodeRuntimePath \+ \[IO\.Path\]::PathSeparator \+ \$previousProcessPath/,
+      `${scriptPath} must put the private Node.js runtime first on PATH`,
+    );
+
+    const prependPath = script.indexOf("$env:Path = if");
+    const dependencyInstall = script.indexOf(
+      '"ci", "--include=dev", "--include=optional", "--ignore-scripts=false"',
+      prependPath,
+    );
+    const agentBuild = script.indexOf(
+      '"run", "build", "--silent"',
+      dependencyInstall,
+    );
+    const restorePath = script.indexOf(
+      '[Environment]::SetEnvironmentVariable(',
+      agentBuild,
+    );
+    assert.ok(
+      prependPath >= 0 &&
+        dependencyInstall > prependPath &&
+        agentBuild > dependencyInstall &&
+        restorePath > agentBuild,
+      `${scriptPath} must scope its PATH override to npm install and build`,
+    );
+  }
+});
+
 test("Windows full uninstall fails closed and stops every owned process class", () => {
   const script = readFileSync("windows/uninstall-agent.ps1", "utf8");
   assert.match(script, /EnumerateFileSystemInfos/);
@@ -301,7 +342,7 @@ test("Windows admin layers propagate explicit script exit codes", () => {
 
 test("public Windows bootstrap is pinned, local-only, transactional, and quiet", () => {
   const script = readFileSync("windows/bootstrap.ps1", "utf8");
-  assert.match(script, /\[string\]\$Ref = "v1\.2\.2"/);
+  assert.match(script, /\[string\]\$Ref = "v1\.2\.3"/);
   assert.match(script, /"AUTO_TUNNEL=0"/);
   assert.match(script, /"CONTROL_PLANE_URL="/);
   assert.match(script, /-NodeOnly/);

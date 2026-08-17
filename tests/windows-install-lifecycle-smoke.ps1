@@ -722,8 +722,37 @@ try {
   $node = Join-Path (Join-Path $RuntimeRoot $nodeId) "node.exe"
   $env:npm_config_cache = Join-Path $RuntimeRoot "npm-cache"
   $env:npm_config_update_notifier = "false"
-  Invoke-NativeStrict -FilePath $npm -Arguments @("ci", "--foreground-scripts", "--no-audit", "--no-fund") -WorkingDirectory $ReleaseRoot -Description "Installed-release dependency installation"
-  Invoke-NativeStrict -FilePath $npm -Arguments @("run", "build", "--silent") -WorkingDirectory $ReleaseRoot -Description "Installed-release build"
+  $privateNodeRoot = Split-Path -Parent $node
+  $systemPathEntries = @(
+    (Join-Path $env:SystemRoot "System32"),
+    $env:SystemRoot,
+    (Join-Path $env:SystemRoot "System32\Wbem"),
+    (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0")
+  )
+  $previousPath = [string]$env:PATH
+  try {
+    # setup-node is needed for repository CI, but a clean Prostar install has
+    # no hosted-toolcache Node on PATH. Keep only Windows essentials plus the
+    # private runtime so npm lifecycle scripts must resolve Prostar's node.exe.
+    $env:PATH = (@($privateNodeRoot) + $systemPathEntries) -join ";"
+    if ($env:PATH -match "hostedtoolcache") {
+      throw "The target-side dependency PATH retained setup-node."
+    }
+    $where = Join-Path $env:SystemRoot "System32\where.exe"
+    $resolvedNodes = @(& $where node.exe)
+    $whereExitCode = $LASTEXITCODE
+    if ($whereExitCode -ne 0 -or $resolvedNodes.Count -ne 1 -or
+        -not [IO.Path]::GetFullPath([string]$resolvedNodes[0]).Equals(
+          [IO.Path]::GetFullPath($node),
+          [StringComparison]::OrdinalIgnoreCase
+        )) {
+      throw "The target-side dependency install did not resolve the private Node.js runtime."
+    }
+    Invoke-NativeStrict -FilePath $npm -Arguments @("ci", "--foreground-scripts", "--no-audit", "--no-fund") -WorkingDirectory $ReleaseRoot -Description "Installed-release dependency installation"
+    Invoke-NativeStrict -FilePath $npm -Arguments @("run", "build", "--silent") -WorkingDirectory $ReleaseRoot -Description "Installed-release build"
+  } finally {
+    $env:PATH = $previousPath
+  }
 
   $installer = Join-Path $ReleaseRoot "windows\install-agent.ps1"
   Invoke-PowerShellScript -ScriptPath $installer -Description "Windows scheduled-task installation"

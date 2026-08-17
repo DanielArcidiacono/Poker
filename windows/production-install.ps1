@@ -205,7 +205,7 @@ function Invoke-ProstarHttp {
   $request.Timeout = $TimeoutMilliseconds
   $request.ReadWriteTimeout = $TimeoutMilliseconds
   $request.AllowAutoRedirect = $false
-  $request.UserAgent = "Prostar-Windows-Installer/1.2.2"
+  $request.UserAgent = "Prostar-Windows-Installer/1.2.3"
   if (-not [string]::IsNullOrWhiteSpace($Bearer)) {
     $request.Headers["Authorization"] = "Bearer $Bearer"
   }
@@ -571,9 +571,21 @@ try {
       $cloudflaredId -notmatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") {
     throw "The private runtime pointers are invalid."
   }
-  $npmPath = Join-Path (Join-Path $RuntimeRoot $nodeId) "npm.cmd"
+  $nodeRuntimePath = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot $nodeId))
+  $runtimePrefix = [IO.Path]::GetFullPath($RuntimeRoot).TrimEnd("\") + "\"
+  if (-not $nodeRuntimePath.StartsWith(
+      $runtimePrefix,
+      [StringComparison]::OrdinalIgnoreCase
+    ) -or
+      -not (Test-Path -LiteralPath $nodeRuntimePath -PathType Container) -or
+      (Test-ReparsePoint -LiteralPath $nodeRuntimePath)) {
+    throw "The private Node.js runtime path is invalid."
+  }
+  $nodePath = Join-Path $nodeRuntimePath "node.exe"
+  $npmPath = Join-Path $nodeRuntimePath "npm.cmd"
   $cloudflaredPath = Join-Path (Join-Path $RuntimeRoot $cloudflaredId) "cloudflared.exe"
-  if (-not (Test-Path -LiteralPath $npmPath -PathType Leaf) -or
+  if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $npmPath -PathType Leaf) -or
       -not (Test-Path -LiteralPath $cloudflaredPath -PathType Leaf)) {
     throw "The private Prostar runtime is incomplete."
   }
@@ -596,12 +608,33 @@ try {
   $env:npm_config_cache = Join-Path $RuntimeRoot "npm-cache"
   $env:npm_config_update_notifier = "false"
   [void](New-Item -ItemType Directory -Path $env:npm_config_cache -Force)
-  Invoke-LoggedNative -FilePath $npmPath -Arguments @(
-    "ci", "--foreground-scripts", "--no-audit", "--no-fund"
-  ) -WorkingDirectory $ReleasePath -Description "Dependency installation"
-  Invoke-LoggedNative -FilePath $npmPath -Arguments @(
-    "run", "build", "--silent"
-  ) -WorkingDirectory $ReleasePath -Description "Agent build"
+  $previousProcessPath = [Environment]::GetEnvironmentVariable(
+    "Path",
+    [EnvironmentVariableTarget]::Process
+  )
+  try {
+    # npm.cmd starts with its sibling node.exe, but dependency lifecycle scripts
+    # invoke `node` by name. A clean PC has no machine Node.js installation, so
+    # expose only Prostar's verified runtime to these child processes.
+    $env:Path = if ([string]::IsNullOrEmpty($previousProcessPath)) {
+      $nodeRuntimePath
+    } else {
+      $nodeRuntimePath + [IO.Path]::PathSeparator + $previousProcessPath
+    }
+    Invoke-LoggedNative -FilePath $npmPath -Arguments @(
+      "ci", "--include=dev", "--include=optional", "--ignore-scripts=false",
+      "--foreground-scripts", "--no-audit", "--no-fund"
+    ) -WorkingDirectory $ReleasePath -Description "Dependency installation"
+    Invoke-LoggedNative -FilePath $npmPath -Arguments @(
+      "run", "build", "--silent"
+    ) -WorkingDirectory $ReleasePath -Description "Agent build"
+  } finally {
+    [Environment]::SetEnvironmentVariable(
+      "Path",
+      $previousProcessPath,
+      [EnvironmentVariableTarget]::Process
+    )
+  }
 
   Write-InstallLog "Phase: starting the background task."
   Invoke-AgentInstaller -Arguments @()

@@ -5,7 +5,7 @@ umask 077
 # Public, local-only installer. Dashboard pairing uses its own expiring setup
 # command, which supplies scoped credentials and enables remote sharing.
 REPOSITORY="${PROSTAR_GITHUB_REPOSITORY:-DanielArcidiacono/Poker}"
-REF="${PROSTAR_REF:-v1.2.2}"
+REF="${PROSTAR_REF:-v1.2.3}"
 APP_ROOT="$HOME/Library/Application Support/Prostar"
 CURRENT_PATH="$APP_ROOT/current"
 ADMIN_LINK="$HOME/.local/bin/prostar-admin"

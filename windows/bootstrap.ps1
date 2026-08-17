@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Repository = "DanielArcidiacono/Poker",
-  [string]$Ref = "v1.2.2",
+  [string]$Ref = "v1.2.3",
   [string]$ViewerPassword = ""
 )
 
@@ -432,8 +432,20 @@ try {
   if ($nodeId -notmatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$") {
     throw "The private Node.js runtime pointer is invalid."
   }
-  $npmPath = Join-Path (Join-Path $RuntimeRoot $nodeId) "npm.cmd"
-  if (-not (Test-Path -LiteralPath $npmPath -PathType Leaf)) {
+  $nodeRuntimePath = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot $nodeId))
+  $runtimePrefix = [IO.Path]::GetFullPath($RuntimeRoot).TrimEnd("\") + "\"
+  if (-not $nodeRuntimePath.StartsWith(
+      $runtimePrefix,
+      [StringComparison]::OrdinalIgnoreCase
+    ) -or
+      -not (Test-Path -LiteralPath $nodeRuntimePath -PathType Container) -or
+      (Test-ReparsePoint -LiteralPath $nodeRuntimePath)) {
+    throw "The private Node.js runtime path is invalid."
+  }
+  $nodePath = Join-Path $nodeRuntimePath "node.exe"
+  $npmPath = Join-Path $nodeRuntimePath "npm.cmd"
+  if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $npmPath -PathType Leaf)) {
     throw "The private Node.js runtime is incomplete."
   }
 
@@ -453,12 +465,33 @@ try {
   $env:npm_config_cache = Join-Path $RuntimeRoot "npm-cache"
   $env:npm_config_update_notifier = "false"
   [void](New-Item -ItemType Directory -Path $env:npm_config_cache -Force)
-  Invoke-LoggedNative -FilePath $npmPath -Arguments @(
-    "ci", "--foreground-scripts", "--no-audit", "--no-fund"
-  ) -WorkingDirectory $ReleasePath -Description "Dependency installation"
-  Invoke-LoggedNative -FilePath $npmPath -Arguments @(
-    "run", "build", "--silent"
-  ) -WorkingDirectory $ReleasePath -Description "Agent build"
+  $previousProcessPath = [Environment]::GetEnvironmentVariable(
+    "Path",
+    [EnvironmentVariableTarget]::Process
+  )
+  try {
+    # npm.cmd starts with its sibling node.exe, but dependency lifecycle scripts
+    # invoke `node` by name. A clean PC has no machine Node.js installation, so
+    # expose only Prostar's verified runtime to these child processes.
+    $env:Path = if ([string]::IsNullOrEmpty($previousProcessPath)) {
+      $nodeRuntimePath
+    } else {
+      $nodeRuntimePath + [IO.Path]::PathSeparator + $previousProcessPath
+    }
+    Invoke-LoggedNative -FilePath $npmPath -Arguments @(
+      "ci", "--include=dev", "--include=optional", "--ignore-scripts=false",
+      "--foreground-scripts", "--no-audit", "--no-fund"
+    ) -WorkingDirectory $ReleasePath -Description "Dependency installation"
+    Invoke-LoggedNative -FilePath $npmPath -Arguments @(
+      "run", "build", "--silent"
+    ) -WorkingDirectory $ReleasePath -Description "Agent build"
+  } finally {
+    [Environment]::SetEnvironmentVariable(
+      "Path",
+      $previousProcessPath,
+      [EnvironmentVariableTarget]::Process
+    )
+  }
 
   Invoke-AgentInstaller -TargetRelease $ReleasePath -Arguments @()
   $HandoffStarted = $true

@@ -41,7 +41,7 @@ const LIVE_STATUS_REPUBLISH_MS = 60_000;
 const CONTROL_PLANE_DISCONNECT_GRACE_MS = 60_000;
 const MAX_START_RETRY_MS = 60_000;
 const PRODUCT_NAME = "Prostar";
-const AGENT_VERSION = "1.2.2";
+const AGENT_VERSION = "1.2.3";
 
 export type AgentPlatform = "macos" | "windows" | "other";
 
