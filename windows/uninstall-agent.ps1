@@ -15,6 +15,7 @@ $RuntimeRoot = Join-Path $AppRoot "runtime"
 $CurrentPointer = Join-Path $AppRoot "current.txt"
 $PendingIdentity = Join-Path $AppRoot ".pending-enrollment"
 $LauncherPath = Join-Path $AppRoot "prostar-launcher.cmd"
+$TaskHostPath = Join-Path $AppRoot "prostar-task-host-v2.exe"
 
 function Get-TaskName {
   $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -96,14 +97,16 @@ function Assert-OwnedTask {
     throw "The existing $TaskName task is not owned by this Prostar installation."
   }
   $action = $actions.Item(1)
-  $expectedCommand = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
   $actualCommand = [IO.Path]::GetFullPath([string]$action.Path)
-  $expectedArguments = "/d /q /c call `"$LauncherPath`""
-  if (-not $actualCommand.Equals($expectedCommand, [StringComparison]::OrdinalIgnoreCase) -or
-      -not ([string]$action.Arguments).Trim().Equals(
-        $expectedArguments,
-        [StringComparison]::OrdinalIgnoreCase
-      )) {
+  $actualArguments = ([string]$action.Arguments).Trim()
+  $expectedTaskHost = [IO.Path]::GetFullPath($TaskHostPath)
+  $expectedLegacyCommand = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
+  $expectedLegacyArguments = "/d /q /c call `"$LauncherPath`""
+  $isCurrent = $actualCommand.Equals($expectedTaskHost, [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::IsNullOrWhiteSpace($actualArguments)
+  $isLegacy = $actualCommand.Equals($expectedLegacyCommand, [StringComparison]::OrdinalIgnoreCase) -and
+    $actualArguments.Equals($expectedLegacyArguments, [StringComparison]::OrdinalIgnoreCase)
+  if (-not $isCurrent -and -not $isLegacy) {
     throw "The existing $TaskName task is not owned by this Prostar installation."
   }
 }
@@ -160,9 +163,10 @@ function Get-OwnedProstarProcesses {
     $isCaptureWorker = $full.Equals($powerShellPath, [StringComparison]::OrdinalIgnoreCase) -and
       $commandLine.IndexOf($releasePrefix, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
       $commandLine.IndexOf($captureSuffix, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $isTaskHost = $full.Equals([IO.Path]::GetFullPath($TaskHostPath), [StringComparison]::OrdinalIgnoreCase)
     $isLauncher = $full.Equals($cmdPath, [StringComparison]::OrdinalIgnoreCase) -and
       $commandLine.IndexOf($LauncherPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
-    if ($isRuntimeProcess -or $isCaptureWorker -or $isLauncher) {
+    if ($isRuntimeProcess -or $isCaptureWorker -or $isTaskHost -or $isLauncher) {
       $identity = Get-ProcessIdentity -ProcessId ([int]$process.ProcessId)
       if ($identity) {
         [void]$result.Add($identity)

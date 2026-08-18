@@ -17,6 +17,8 @@ $AppRoot = [IO.Path]::GetFullPath((Join-Path $LocalAppData "Prostar"))
 $RuntimeRoot = Join-Path $AppRoot "runtime"
 $LogsRoot = Join-Path $AppRoot "logs"
 $CurrentPointer = Join-Path $AppRoot "current.txt"
+$LauncherPath = Join-Path $AppRoot "prostar-launcher.cmd"
+$TaskHostPath = Join-Path $AppRoot "prostar-task-host-v2.exe"
 
 function Get-TaskName {
   $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -146,15 +148,16 @@ function Assert-OwnedTask {
     throw "The existing $TaskName task is not owned by this Prostar installation."
   }
   $action = $actions.Item(1)
-  $expectedCommand = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
   $actualCommand = [IO.Path]::GetFullPath([string]$action.Path)
-  $launcherPath = Join-Path $AppRoot "prostar-launcher.cmd"
-  $expectedArguments = "/d /q /c call `"$launcherPath`""
-  if (-not $actualCommand.Equals($expectedCommand, [StringComparison]::OrdinalIgnoreCase) -or
-      -not ([string]$action.Arguments).Trim().Equals(
-        $expectedArguments,
-        [StringComparison]::OrdinalIgnoreCase
-      )) {
+  $actualArguments = ([string]$action.Arguments).Trim()
+  $expectedTaskHost = [IO.Path]::GetFullPath($TaskHostPath)
+  $expectedLegacyCommand = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
+  $expectedLegacyArguments = "/d /q /c call `"$LauncherPath`""
+  $isCurrent = $actualCommand.Equals($expectedTaskHost, [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::IsNullOrWhiteSpace($actualArguments)
+  $isLegacy = $actualCommand.Equals($expectedLegacyCommand, [StringComparison]::OrdinalIgnoreCase) -and
+    $actualArguments.Equals($expectedLegacyArguments, [StringComparison]::OrdinalIgnoreCase)
+  if (-not $isCurrent -and -not $isLegacy) {
     throw "The existing $TaskName task is not owned by this Prostar installation."
   }
 }
@@ -212,7 +215,6 @@ function Get-OwnedProstarProcesses {
   $releasePrefix = [IO.Path]::GetFullPath((Join-Path $AppRoot "releases")).TrimEnd("\") + "\"
   $captureSuffix = "\windows\capture-worker.ps1"
   $powerShellPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"))
-  $launcherPath = Join-Path $AppRoot "prostar-launcher.cmd"
   $cmdPath = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
   foreach ($process in @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)) {
     $path = [string]$process.ExecutablePath
@@ -229,9 +231,10 @@ function Get-OwnedProstarProcesses {
     $isCaptureWorker = $full.Equals($powerShellPath, [StringComparison]::OrdinalIgnoreCase) -and
       $commandLine.IndexOf($releasePrefix, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
       $commandLine.IndexOf($captureSuffix, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $isTaskHost = $full.Equals([IO.Path]::GetFullPath($TaskHostPath), [StringComparison]::OrdinalIgnoreCase)
     $isLauncher = $full.Equals($cmdPath, [StringComparison]::OrdinalIgnoreCase) -and
-      $commandLine.IndexOf($launcherPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
-    if ($isRuntimeProcess -or $isCaptureWorker -or $isLauncher) {
+      $commandLine.IndexOf($LauncherPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    if ($isRuntimeProcess -or $isCaptureWorker -or $isTaskHost -or $isLauncher) {
       $identity = Get-ProcessIdentity -ProcessId ([int]$process.ProcessId)
       if ($identity) {
         [void]$result.Add($identity)

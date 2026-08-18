@@ -27,6 +27,8 @@ $LogsRoot = Join-Path $AppRoot "logs"
 $CurrentPointer = Join-Path $AppRoot "current.txt"
 $PendingMarker = Join-Path $AppRoot ".install-pending.json"
 $LauncherPath = Join-Path $AppRoot "prostar-launcher.cmd"
+$TaskHostPath = Join-Path $AppRoot "prostar-task-host-v2.exe"
+$TaskHostSourcePath = Join-Path $ReleaseRoot "windows\task-host.cs"
 $AdminWrapperPath = Join-Path $AppRoot "prostar-admin.ps1"
 $AdminCommandPath = Join-Path $AppRoot "prostar-admin.cmd"
 $EnvPath = Join-Path $ReleaseRoot ".env"
@@ -72,6 +74,9 @@ function Assert-InstallPaths {
   if (-not (Test-Path -LiteralPath (Join-Path $ReleaseRoot "windows\cleanup-orphans.ps1") -PathType Leaf)) {
     throw "The Prostar release has no Windows child-process cleanup helper."
   }
+  if (-not (Test-Path -LiteralPath $TaskHostSourcePath -PathType Leaf)) {
+    throw "The Prostar release has no Windows background task-host source."
+  }
 }
 
 function Get-TaskName {
@@ -105,7 +110,7 @@ function Get-ProstarTask {
   }
 }
 
-function Assert-OwnedTask {
+function Get-TaskActionVariant {
   param($Task)
   if ($null -eq $Task) {
     return
@@ -115,15 +120,24 @@ function Assert-OwnedTask {
     throw "The existing $TaskName task is not owned by this Prostar installation."
   }
   $action = $actions.Item(1)
-  $expectedCommand = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
   $actualCommand = [IO.Path]::GetFullPath([string]$action.Path)
-  $expectedArguments = "/d /q /c call `"$LauncherPath`""
-  if (-not $actualCommand.Equals($expectedCommand, [StringComparison]::OrdinalIgnoreCase) -or
-      -not ([string]$action.Arguments).Trim().Equals(
-        $expectedArguments,
-        [StringComparison]::OrdinalIgnoreCase
-      )) {
-    throw "The existing $TaskName task is not owned by this Prostar installation."
+  $actualArguments = ([string]$action.Arguments).Trim()
+  $expectedTaskHost = [IO.Path]::GetFullPath($TaskHostPath)
+  $expectedLegacyCommand = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot "System32\cmd.exe"))
+  $expectedLegacyArguments = "/d /q /c call `"$LauncherPath`""
+  $isCurrent = $actualCommand.Equals($expectedTaskHost, [StringComparison]::OrdinalIgnoreCase) -and
+    [string]::IsNullOrWhiteSpace($actualArguments)
+  $isLegacy = $actualCommand.Equals($expectedLegacyCommand, [StringComparison]::OrdinalIgnoreCase) -and
+    $actualArguments.Equals($expectedLegacyArguments, [StringComparison]::OrdinalIgnoreCase)
+  if ($isCurrent) { return "gui-v2" }
+  if ($isLegacy) { return "legacy-cmd" }
+  throw "The existing $TaskName task is not owned by this Prostar installation."
+}
+
+function Assert-OwnedTask {
+  param($Task)
+  if ($null -ne $Task) {
+    [void](Get-TaskActionVariant -Task $Task)
   }
 }
 
@@ -190,9 +204,10 @@ function Get-OwnedProstarProcesses {
     $isCaptureWorker = $full.Equals($powerShellPath, [StringComparison]::OrdinalIgnoreCase) -and
       $commandLine.IndexOf($releasePrefix, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
       $commandLine.IndexOf($captureSuffix, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $isTaskHost = $full.Equals([IO.Path]::GetFullPath($TaskHostPath), [StringComparison]::OrdinalIgnoreCase)
     $isLauncher = $full.Equals($cmdPath, [StringComparison]::OrdinalIgnoreCase) -and
       $commandLine.IndexOf($LauncherPath, [StringComparison]::OrdinalIgnoreCase) -ge 0
-    if ($isRuntimeProcess -or $isCaptureWorker -or $isLauncher) {
+    if ($isRuntimeProcess -or $isCaptureWorker -or $isTaskHost -or $isLauncher) {
       $identity = Get-ProcessIdentity -ProcessId ([int]$process.ProcessId)
       if ($identity) {
         [void]$result.Add($identity)
@@ -288,10 +303,15 @@ function Write-AtomicText {
     [Parameter(Mandatory = $true)][string]$LiteralPath,
     [Parameter(Mandatory = $true)][string]$Value
   )
+  $contents = $Value + [Environment]::NewLine
+  if ((Test-Path -LiteralPath $LiteralPath -PathType Leaf) -and
+      [IO.File]::ReadAllText($LiteralPath).Equals($contents, [StringComparison]::Ordinal)) {
+    return
+  }
   $parent = Split-Path -Parent $LiteralPath
   $temporary = Join-Path $parent (".write-" + [Guid]::NewGuid().ToString("N"))
   try {
-    [IO.File]::WriteAllText($temporary, $Value + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText($temporary, $contents, (New-Object Text.UTF8Encoding($false)))
     if (Test-Path -LiteralPath $LiteralPath) {
       $backup = Join-Path $parent (".backup-" + [Guid]::NewGuid().ToString("N"))
       try {
@@ -326,6 +346,29 @@ function Get-CurrentReleaseId {
   return $releaseId
 }
 
+function Test-WindowsGuiExecutable {
+  param([Parameter(Mandatory = $true)][string]$LiteralPath)
+  try {
+    if (-not (Test-Path -LiteralPath $LiteralPath -PathType Leaf) -or
+        (Test-ReparsePoint -LiteralPath $LiteralPath)) {
+      return $false
+    }
+    [byte[]]$bytes = [IO.File]::ReadAllBytes($LiteralPath)
+    if ($bytes.Length -lt 1024 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) {
+      return $false
+    }
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3c)
+    if ($peOffset -lt 0x40 -or $peOffset + 94 -gt $bytes.Length -or
+        $bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45 -or
+        $bytes[$peOffset + 2] -ne 0 -or $bytes[$peOffset + 3] -ne 0) {
+      return $false
+    }
+    return [BitConverter]::ToUInt16($bytes, $peOffset + 24 + 68) -eq 2
+  } catch {
+    return $false
+  }
+}
+
 function Write-LauncherFiles {
   $launcher = @'
 @echo off
@@ -351,10 +394,33 @@ cd /d "%PROSTAR_RELEASE_ROOT%" || exit /b 8
 "%PROSTAR_NODE%" "dist\server.js" >>"%PROSTAR_ROOT%\logs\prostar.out.log" 2>>"%PROSTAR_ROOT%\logs\prostar.err.log"
 %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%PROSTAR_RELEASE_ROOT%\windows\cleanup-orphans.ps1" >>"%PROSTAR_ROOT%\logs\prostar.out.log" 2>>"%PROSTAR_ROOT%\logs\prostar.err.log"
 if errorlevel 1 exit /b 9
-%SystemRoot%\System32\timeout.exe /t 10 /nobreak >nul
+%SystemRoot%\System32\ping.exe -n 11 127.0.0.1 >nul 2>nul
 goto prostar_restart
 '@
-  [IO.File]::WriteAllText($LauncherPath, $launcher.Replace("`n", "`r`n"), (New-Object Text.ASCIIEncoding))
+  Write-AtomicText -LiteralPath $LauncherPath -Value ($launcher.Replace("`n", "`r`n").TrimEnd([char[]]"`r`n"))
+
+  if (Test-Path -LiteralPath $TaskHostPath) {
+    if (-not (Test-WindowsGuiExecutable -LiteralPath $TaskHostPath)) {
+      throw "The existing Prostar background task host is unsafe."
+    }
+  } else {
+    if (-not (Test-Path -LiteralPath $TaskHostSourcePath -PathType Leaf)) {
+      throw "The Prostar background task-host source is unavailable."
+    }
+    $temporaryTaskHost = Join-Path $AppRoot (".prostar-task-host." + [Guid]::NewGuid().ToString("N") + ".exe")
+    try {
+      Add-Type `
+        -LiteralPath $TaskHostSourcePath `
+        -OutputAssembly $temporaryTaskHost `
+        -OutputType WindowsApplication
+      if (-not (Test-WindowsGuiExecutable -LiteralPath $temporaryTaskHost)) {
+        throw "The Prostar background task host could not be built."
+      }
+      [IO.File]::Move($temporaryTaskHost, $TaskHostPath)
+    } finally {
+      Remove-Item -LiteralPath $temporaryTaskHost -Force -ErrorAction SilentlyContinue
+    }
+  }
 
   $adminWrapper = @'
 [CmdletBinding()]
@@ -368,18 +434,21 @@ if (-not (Test-Path -LiteralPath $script -PathType Leaf)) { throw "The Prostar a
 & $script @Arguments
 exit $LASTEXITCODE
 '@
-  [IO.File]::WriteAllText($AdminWrapperPath, $adminWrapper.Replace("`n", "`r`n"), (New-Object Text.ASCIIEncoding))
+  Write-AtomicText -LiteralPath $AdminWrapperPath -Value ($adminWrapper.Replace("`n", "`r`n").TrimEnd([char[]]"`r`n"))
 
   $adminCommand = @'
 @echo off
 %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Prostar\prostar-admin.ps1" %*
 exit /b %ERRORLEVEL%
 '@
-  [IO.File]::WriteAllText($AdminCommandPath, $adminCommand.Replace("`n", "`r`n"), (New-Object Text.ASCIIEncoding))
+  Write-AtomicText -LiteralPath $AdminCommandPath -Value ($adminCommand.Replace("`n", "`r`n").TrimEnd([char[]]"`r`n"))
 }
 
 function Register-ProstarTask {
-  param([Parameter(Mandatory = $true)]$Service)
+  param(
+    [Parameter(Mandatory = $true)]$Service,
+    [ValidateSet("gui-v2", "legacy-cmd")][string]$ActionVariant = "gui-v2"
+  )
   $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   $folder = $Service.GetFolder("\")
   $definition = $Service.NewTask(0)
@@ -395,8 +464,13 @@ function Register-ProstarTask {
   $trigger.Enabled = $true
 
   $action = $definition.Actions.Create(0)
-  $action.Path = Join-Path $env:SystemRoot "System32\cmd.exe"
-  $action.Arguments = "/d /q /c call `"$LauncherPath`""
+  if ($ActionVariant -eq "legacy-cmd") {
+    $action.Path = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $action.Arguments = "/d /q /c call `"$LauncherPath`""
+  } else {
+    $action.Path = $TaskHostPath
+    $action.Arguments = ""
+  }
   $action.WorkingDirectory = $AppRoot
 
   $settings = $definition.Settings
@@ -451,6 +525,14 @@ function Restore-PreviousInstall {
     return
   }
   $marker = [IO.File]::ReadAllText($PendingMarker) | ConvertFrom-Json
+  $previousActionVariant = "legacy-cmd"
+  $variantProperty = $marker.PSObject.Properties["taskActionVariant"]
+  if ($null -ne $variantProperty) {
+    $previousActionVariant = [string]$variantProperty.Value
+  }
+  if ($previousActionVariant -notin @("gui-v2", "legacy-cmd")) {
+    throw "The saved Prostar task action is invalid."
+  }
   $service = Connect-TaskScheduler
   Stop-ProstarTaskStrictly -Service $service -Disable
 
@@ -471,7 +553,7 @@ function Restore-PreviousInstall {
       $service.GetFolder("\").DeleteTask($TaskName, 0)
     }
   } else {
-    $task = Register-ProstarTask -Service $service
+    $task = Register-ProstarTask -Service $service -ActionVariant $previousActionVariant
     if ([bool]$marker.taskEnabled) {
       $task.Enabled = $true
       if ([bool]$marker.taskWasRunning -and -not [string]::IsNullOrWhiteSpace($previousRelease)) {
@@ -517,16 +599,19 @@ if ($existingTask) {
 $previousRelease = Get-CurrentReleaseId
 $taskWasRunning = $false
 $taskWasEnabled = $false
+$taskActionVariant = "legacy-cmd"
 if ($existingTask) {
   $taskWasRunning = [int]$existingTask.State -eq 4
   $taskWasEnabled = [bool]$existingTask.Enabled
+  $taskActionVariant = Get-TaskActionVariant -Task $existingTask
 }
 $marker = [ordered]@{
-  schema = 1
+  schema = 2
   previousRelease = if ($previousRelease) { $previousRelease } else { "" }
   taskExisted = $null -ne $existingTask
   taskEnabled = $taskWasEnabled
   taskWasRunning = $taskWasRunning
+  taskActionVariant = $taskActionVariant
 }
 Write-AtomicText -LiteralPath $PendingMarker -Value ($marker | ConvertTo-Json -Compress)
 $HandoffActive = $true

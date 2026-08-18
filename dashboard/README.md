@@ -110,9 +110,10 @@ dashboard list itself contains active sessions only: clients disappear after
 their heartbeat expires and reappear automatically when they reconnect. The
 macOS LaunchAgent or Windows per-user Scheduled Task—not the dashboard page—
 keeps each installed agent running through shell/browser closure and starts it
-again after that user logs in following a restart. Neither platform captures
-its sign-in screen; Windows capture also pauses while the interactive desktop
-is locked.
+again after that user logs in following a restart. The Windows task runs in the
+background without a Terminal or Command Prompt window. Neither platform
+captures its sign-in screen; Windows capture also pauses while the interactive
+desktop is locked.
 
 ## Verification
 
