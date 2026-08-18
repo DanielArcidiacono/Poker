@@ -76,7 +76,7 @@ On macOS:
   installer="$(/usr/bin/mktemp -t prostar-bootstrap.XXXXXX)" &&
   trap 'rm -f "$installer"' EXIT &&
   /usr/bin/curl -q --proto '=https' --tlsv1.2 -fsSL \
-    'https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.4/scripts/bootstrap.sh' \
+    'https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.5/scripts/bootstrap.sh' \
     -o "$installer" &&
   /bin/bash "$installer"
 )
@@ -92,7 +92,7 @@ try {
   $Client = New-Object Net.WebClient
   try {
     $Client.DownloadFile(
-      "https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.4/windows/bootstrap.ps1",
+      "https://raw.githubusercontent.com/DanielArcidiacono/Poker/v1.2.5/windows/bootstrap.ps1",
       $Installer
     )
   } finally {
@@ -201,7 +201,7 @@ ScreenViewer name without touching unrelated folders.
 
 Prostar installs a per-user LaunchAgent named `prostar.agent` with `RunAtLoad`
 and `KeepAlive` on macOS. On Windows it installs a per-user Scheduled Task with
-an at-logon trigger and a bounded restart loop:
+an at-logon trigger, a windowless supervisor, and a bounded restart loop:
 
 - Closing Terminal, the browser, or the dashboard does not stop the agent.
 - If the worker exits unexpectedly, launchd or the Windows task launcher

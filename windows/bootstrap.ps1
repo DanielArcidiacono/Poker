@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Repository = "DanielArcidiacono/Poker",
-  [string]$Ref = "v1.2.4",
+  [string]$Ref = "v1.2.5",
   [string]$ViewerPassword = ""
 )
 
@@ -407,6 +407,7 @@ try {
   if (-not (Test-Path -LiteralPath (Join-Path $ReleasePath "package-lock.json") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\ensure-runtime.ps1") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\install-agent.ps1") -PathType Leaf) -or
+      -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\task-host.cs") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\cleanup-orphans.ps1") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "src\server.ts") -PathType Leaf)) {
     throw "The downloaded Prostar source archive is incomplete."

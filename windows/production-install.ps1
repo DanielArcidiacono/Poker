@@ -205,7 +205,7 @@ function Invoke-ProstarHttp {
   $request.Timeout = $TimeoutMilliseconds
   $request.ReadWriteTimeout = $TimeoutMilliseconds
   $request.AllowAutoRedirect = $false
-  $request.UserAgent = "Prostar-Windows-Installer/1.2.4"
+  $request.UserAgent = "Prostar-Windows-Installer/1.2.5"
   if (-not [string]::IsNullOrWhiteSpace($Bearer)) {
     $request.Headers["Authorization"] = "Bearer $Bearer"
   }
@@ -539,6 +539,7 @@ try {
   [IO.Directory]::Move([IO.Path]::GetFullPath($SourceRoot), $ReleasePath)
   if (-not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\ensure-runtime.ps1") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\install-agent.ps1") -PathType Leaf) -or
+      -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\task-host.cs") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\cleanup-orphans.ps1") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "windows\uninstall-agent.ps1") -PathType Leaf) -or
       -not (Test-Path -LiteralPath (Join-Path $ReleasePath "src\server.ts") -PathType Leaf)) {

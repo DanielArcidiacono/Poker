@@ -109,7 +109,7 @@ function Resolve-TaskAccountSid {
 }
 
 function Wait-Health {
-  for ($attempt = 0; $attempt -lt 30; $attempt++) {
+  for ($attempt = 0; $attempt -lt 100; $attempt++) {
     try {
       $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8787/api/health" -TimeoutSec 2
       if ($response.StatusCode -eq 200) {
@@ -826,6 +826,62 @@ try {
   if ([int]$task.Definition.Principal.LogonType -ne 3) {
     throw "The Prostar scheduled task is not using the interactive user token."
   }
+  $taskAction = $task.Definition.Actions.Item(1)
+  $expectedTaskHost = Join-Path $AppRoot "prostar-task-host-v2.exe"
+  if (-not [IO.Path]::GetFullPath([string]$taskAction.Path).Equals(
+      [IO.Path]::GetFullPath($expectedTaskHost),
+      [StringComparison]::OrdinalIgnoreCase
+    ) -or
+      -not [string]::IsNullOrWhiteSpace([string]$taskAction.Arguments)) {
+    throw "The Prostar scheduled task is not hosted by its windowless executable."
+  }
+  $taskHostBytes = [IO.File]::ReadAllBytes($expectedTaskHost)
+  if ($taskHostBytes.Length -lt 1024) {
+    throw "The Prostar task-host executable is incomplete."
+  }
+  $peOffset = [BitConverter]::ToInt32($taskHostBytes, 0x3c)
+  $subsystem = [BitConverter]::ToUInt16($taskHostBytes, $peOffset + 24 + 68)
+  if ($subsystem -ne 2) {
+    throw "The Prostar task host is not a Windows GUI-subsystem executable."
+  }
+  $runningInstances = $task.GetInstances(0)
+  if ($runningInstances.Count -ne 1) {
+    throw "The Prostar scheduled task does not have exactly one running host."
+  }
+  $taskHostProcesses = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        ([string]$_.ExecutablePath).Equals(
+          $expectedTaskHost,
+          [StringComparison]::OrdinalIgnoreCase
+        )
+      }
+  )
+  if ($taskHostProcesses.Count -ne 1) {
+    throw "The Prostar scheduled task does not have exactly one windowless task host."
+  }
+  $taskHostProcess = Get-Process -Id ([int]$taskHostProcesses[0].ProcessId) -ErrorAction Stop
+  if ($taskHostProcess.MainWindowHandle -ne [IntPtr]::Zero) {
+    throw "The Prostar task host unexpectedly owns a visible window."
+  }
+  $launcherProcesses = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        [int]$_.ParentProcessId -eq $taskHostProcess.Id -and
+        ([string]$_.ExecutablePath).Equals(
+          (Join-Path $env:SystemRoot "System32\cmd.exe"),
+          [StringComparison]::OrdinalIgnoreCase
+        ) -and
+        ([string]$_.CommandLine).IndexOf(
+          (Join-Path $AppRoot "prostar-launcher.cmd"),
+          [StringComparison]::OrdinalIgnoreCase
+        ) -ge 0
+      }
+  )
+  if ($launcherProcesses.Count -ne 1 -or
+      (Get-Process -Id ([int]$launcherProcesses[0].ProcessId) -ErrorAction Stop).MainWindowHandle -ne [IntPtr]::Zero) {
+    throw "The Prostar launcher is not running without a console window."
+  }
   $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
   $principalSid = Resolve-TaskAccountSid -Identity ([string]$task.Definition.Principal.UserId)
   if (-not $principalSid.Equals(
@@ -889,6 +945,206 @@ try {
   if ($operations -notcontains "probe" -or $operations -notcontains "capture") {
     throw "The lifecycle smoke did not exercise both probe and full-frame capture operations."
   }
+
+  $agentProcesses = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        ([string]$_.ExecutablePath).Equals($node, [StringComparison]::OrdinalIgnoreCase) -and
+        ([string]$_.CommandLine).IndexOf("dist\server.js", [StringComparison]::OrdinalIgnoreCase) -ge 0
+      }
+  )
+  if ($agentProcesses.Count -ne 1) {
+    throw "The lifecycle smoke could not identify exactly one Prostar Node agent."
+  }
+  if ([int]$agentProcesses[0].ParentProcessId -ne [int]$launcherProcesses[0].ProcessId -or
+      (Get-Process -Id ([int]$agentProcesses[0].ProcessId) -ErrorAction Stop).MainWindowHandle -ne [IntPtr]::Zero) {
+    throw "The Prostar Node agent is not a windowless child of the supervised launcher."
+  }
+  $taskHostIdBeforeNodeCrash = $taskHostProcess.Id
+  $launcherIdBeforeNodeCrash = [int]$launcherProcesses[0].ProcessId
+  $nodeIdBeforeCrash = [int]$agentProcesses[0].ProcessId
+  $restartTimer = [Diagnostics.Stopwatch]::StartNew()
+  Stop-Process -Id $nodeIdBeforeCrash -Force -ErrorAction Stop
+  Wait-Process -Id $nodeIdBeforeCrash -Timeout 5 -ErrorAction SilentlyContinue
+  $observedBackoff = $false
+  for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    $backoffProcesses = @(
+      Get-CimInstance -ClassName Win32_Process -Filter "Name = 'PING.EXE'" -ErrorAction Stop |
+        Where-Object {
+          [int]$_.ParentProcessId -eq $launcherIdBeforeNodeCrash -and
+          ([string]$_.ExecutablePath).Equals(
+            (Join-Path $env:SystemRoot "System32\PING.EXE"),
+            [StringComparison]::OrdinalIgnoreCase
+          )
+        }
+    )
+    if ($backoffProcesses.Count -eq 1) {
+      $observedBackoff = $true
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not $observedBackoff) {
+    throw "The headless launcher did not enter its noninteractive crash backoff."
+  }
+  Wait-Health
+  $restartTimer.Stop()
+  if ($restartTimer.Elapsed.TotalSeconds -lt 8 -or $restartTimer.Elapsed.TotalSeconds -gt 30) {
+    throw "The headless launcher did not preserve its bounded crash-restart delay."
+  }
+  $postCrashHosts = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        ([string]$_.ExecutablePath).Equals($expectedTaskHost, [StringComparison]::OrdinalIgnoreCase)
+      }
+  )
+  $postCrashLaunchers = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        ([string]$_.ExecutablePath).Equals(
+          (Join-Path $env:SystemRoot "System32\cmd.exe"),
+          [StringComparison]::OrdinalIgnoreCase
+        ) -and
+        ([string]$_.CommandLine).IndexOf(
+          (Join-Path $AppRoot "prostar-launcher.cmd"),
+          [StringComparison]::OrdinalIgnoreCase
+        ) -ge 0
+      }
+  )
+  $postCrashAgents = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        ([string]$_.ExecutablePath).Equals($node, [StringComparison]::OrdinalIgnoreCase) -and
+        ([string]$_.CommandLine).IndexOf("dist\server.js", [StringComparison]::OrdinalIgnoreCase) -ge 0
+      }
+  )
+  if ($postCrashHosts.Count -ne 1 -or
+      [int]$postCrashHosts[0].ProcessId -ne $taskHostIdBeforeNodeCrash -or
+      $postCrashLaunchers.Count -ne 1 -or
+      [int]$postCrashLaunchers[0].ProcessId -ne $launcherIdBeforeNodeCrash -or
+      $postCrashAgents.Count -ne 1 -or
+      [int]$postCrashAgents[0].ProcessId -eq $nodeIdBeforeCrash) {
+    throw "The windowless supervisor did not restart exactly one Node generation in place."
+  }
+  Assert-CapturePreflight
+
+  # A task stop or host crash must not leave screen capture, Node, or the
+  # tunnel running outside Task Scheduler's ownership. Disable automatic
+  # restart, terminate only the GUI host, and require its nested Job Object to
+  # remove the complete descendant tree before starting a fresh generation.
+  $task.Enabled = $false
+  $allProcesses = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+  $containedIds = New-Object "System.Collections.Generic.HashSet[int]"
+  [void]$containedIds.Add($taskHostIdBeforeNodeCrash)
+  $addedDescendant = $true
+  while ($addedDescendant) {
+    $addedDescendant = $false
+    foreach ($process in $allProcesses) {
+      if ($containedIds.Contains([int]$process.ParentProcessId) -and
+          -not $containedIds.Contains([int]$process.ProcessId)) {
+        [void]$containedIds.Add([int]$process.ProcessId)
+        $addedDescendant = $true
+      }
+    }
+  }
+  if (-not $containedIds.Contains($launcherIdBeforeNodeCrash) -or
+      -not $containedIds.Contains([int]$postCrashAgents[0].ProcessId)) {
+    throw "The lifecycle smoke could not snapshot the supervised process tree."
+  }
+  $containedIdentities = @(
+    $allProcesses |
+      Where-Object { $containedIds.Contains([int]$_.ProcessId) } |
+      ForEach-Object {
+        [PSCustomObject]@{
+          ProcessId = [int]$_.ProcessId
+          CreationDate = [string]$_.CreationDate
+          ExecutablePath = [string]$_.ExecutablePath
+          CommandLine = [string]$_.CommandLine
+        }
+      }
+  )
+  Stop-Process -Id $taskHostIdBeforeNodeCrash -Force -ErrorAction Stop
+  $remainingContained = @()
+  for ($attempt = 0; $attempt -lt 50; $attempt++) {
+    $liveProcesses = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
+    $remainingContained = @(
+      $containedIdentities | Where-Object {
+        $identity = $_
+        @(
+          $liveProcesses | Where-Object {
+            [int]$_.ProcessId -eq $identity.ProcessId -and
+            ([string]$_.CreationDate).Equals($identity.CreationDate, [StringComparison]::Ordinal) -and
+            ([string]$_.ExecutablePath).Equals($identity.ExecutablePath, [StringComparison]::OrdinalIgnoreCase) -and
+            ([string]$_.CommandLine).Equals($identity.CommandLine, [StringComparison]::Ordinal)
+          }
+        ).Count -gt 0
+      }
+    )
+    if ($remainingContained.Count -eq 0) {
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  if ($remainingContained.Count -ne 0) {
+    throw "The task host left supervised processes running after it exited."
+  }
+  $schedulerReleasedInstance = $false
+  for ($attempt = 0; $attempt -lt 50; $attempt++) {
+    $task = Get-ProstarTask
+    if ($null -ne $task -and
+        $task.GetInstances(0).Count -eq 0 -and
+        [int]$task.State -ne 4) {
+      $schedulerReleasedInstance = $true
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not $schedulerReleasedInstance) {
+    throw "Task Scheduler did not release the terminated Prostar host."
+  }
+  $task.Enabled = $true
+  [void]$task.Run($null)
+  $containmentRestartTimer = [Diagnostics.Stopwatch]::StartNew()
+  Wait-Health
+  $containmentRestartTimer.Stop()
+  if ($containmentRestartTimer.Elapsed.TotalSeconds -gt 30) {
+    throw "The Prostar task did not recover promptly after host containment."
+  }
+  $freshHosts = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        ([string]$_.ExecutablePath).Equals($expectedTaskHost, [StringComparison]::OrdinalIgnoreCase)
+      }
+  )
+  $freshLaunchers = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        $freshHosts.Count -eq 1 -and
+        [int]$_.ParentProcessId -eq [int]$freshHosts[0].ProcessId -and
+        ([string]$_.ExecutablePath).Equals(
+          (Join-Path $env:SystemRoot "System32\cmd.exe"),
+          [StringComparison]::OrdinalIgnoreCase
+        )
+      }
+  )
+  $freshAgents = @(
+    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+      Where-Object {
+        $freshLaunchers.Count -eq 1 -and
+        [int]$_.ParentProcessId -eq [int]$freshLaunchers[0].ProcessId -and
+        ([string]$_.ExecutablePath).Equals($node, [StringComparison]::OrdinalIgnoreCase) -and
+        ([string]$_.CommandLine).IndexOf("dist\server.js", [StringComparison]::OrdinalIgnoreCase) -ge 0
+      }
+  )
+  if ($freshHosts.Count -ne 1 -or
+      [int]$freshHosts[0].ProcessId -eq $taskHostIdBeforeNodeCrash -or
+      $freshLaunchers.Count -ne 1 -or
+      [int]$freshLaunchers[0].ProcessId -eq $launcherIdBeforeNodeCrash -or
+      $freshAgents.Count -ne 1 -or
+      [int]$freshAgents[0].ProcessId -eq [int]$postCrashAgents[0].ProcessId) {
+    throw "The Prostar task did not restart as exactly one fresh supervised process tree."
+  }
+  Assert-CapturePreflight
 
   Invoke-PowerShellScript -ScriptPath $installer -ScriptArguments @("-FinalizeInstall") -Description "Windows scheduled-task finalization"
   if (Test-Path -LiteralPath (Join-Path $AppRoot ".install-pending.json")) {

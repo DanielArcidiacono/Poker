@@ -62,11 +62,15 @@ test("the production agent archive bundles both platform integrations", () => {
   for (const path of [...scripts, ...windowsScripts]) {
     assert.ok(archivePaths.has(path), `${path} is missing from the agent archive`);
   }
+  assert.ok(
+    archivePaths.has("windows/task-host.cs"),
+    "windows/task-host.cs is missing from the agent archive",
+  );
 });
 
 test("public bootstrap is pinned, local-only, and quiet", () => {
   const script = readFileSync("scripts/bootstrap.sh", "utf8");
-  assert.match(script, /PROSTAR_REF:-v1\.2\.4/);
+  assert.match(script, /PROSTAR_REF:-v1\.2\.5/);
   assert.match(script, /'AUTO_TUNNEL=0'/);
   assert.match(script, /'CONTROL_PLANE_URL='/);
   assert.doesNotMatch(script, /cloudflared/);
@@ -149,9 +153,20 @@ test("Windows distribution is pinned, persistent, transactional, and quiet", () 
   assert.match(installer, /Schedule\.Service/);
   assert.match(installer, /LogonType = 3/);
   assert.match(installer, /RunLevel = 0/);
+  assert.match(installer, /prostar-task-host-v2\.exe/);
+  assert.match(installer, /Test-WindowsGuiExecutable/);
+  assert.match(installer, /-LiteralPath \$TaskHostSourcePath/);
+  assert.match(installer, /-OutputType WindowsApplication/);
+  assert.match(installer, /\$action\.Path = \$TaskHostPath/);
+  assert.match(installer, /\$settings\.Hidden = \$false/);
   assert.match(installer, /ExecutionTimeLimit = "PT0S"/);
   assert.match(installer, /RestartInterval = "PT1M"/);
   assert.match(installer, /\.install-pending\.json/);
+  assert.match(installer, /taskActionVariant = \$taskActionVariant/);
+  assert.match(
+    installer,
+    /Register-ProstarTask -Service \$service -ActionVariant \$previousActionVariant/,
+  );
   assert.match(installer, /RollbackInstall/);
   assert.match(installer, /FinalizeInstall/);
   assert.match(
@@ -174,6 +189,9 @@ test("Windows distribution is pinned, persistent, transactional, and quiet", () 
   );
 
   const production = readFileSync("windows/production-install.ps1", "utf8");
+  assert.match(production, /windows\\task-host\.cs/);
+  const bootstrap = readFileSync("windows/bootstrap.ps1", "utf8");
+  assert.match(bootstrap, /windows\\task-host\.cs/);
   for (const endpoint of ["verify", "enroll", "activate", "deenroll"]) {
     assert.match(production, new RegExp(`/api/agent/${endpoint}`));
   }
@@ -306,6 +324,7 @@ test("Windows full uninstall fails closed and stops every owned process class", 
   assert.match(script, /capture-worker\.ps1/);
   assert.match(script, /cloudflared\.exe|RuntimeRoot/);
   assert.match(script, /prostar-launcher\.cmd/);
+  assert.match(script, /prostar-task-host-v2\.exe/);
   assert.match(script, /@\(Get-OwnedProstarProcesses\)\.Count -gt 0/);
   assert.match(script, /api\/agent\/deenroll/);
   assert.match(script, /status -ne 204/);
@@ -330,6 +349,25 @@ test("Windows full uninstall fails closed and stops every owned process class", 
   assert.match(script, /could not leave the Prostar application directory/);
   assert.match(script, /Removed Prostar and all of its private data\."\s*exit 0/);
   assert.doesNotMatch(script, /\btaskkill\b|Stop-Process\s+-Name/i);
+});
+
+test("Windows task host is a no-console GUI supervisor", () => {
+  const source = readFileSync("windows/task-host.cs", "utf8");
+  assert.match(source, /CreateSuspended \| CreateNoWindow/);
+  assert.match(source, /JobObjectLimitKillOnJobClose/);
+  assert.match(source, /AssignProcessToJobObject/);
+  assert.match(source, /ResumeThread/);
+  assert.match(source, /WaitForSingleObject/);
+  assert.match(source, /GetExitCodeProcess/);
+  const createProcess = source.indexOf("if (!CreateProcess(");
+  const assignProcess = source.indexOf("if (!AssignProcessToJobObject(");
+  const resumeThread = source.indexOf("if (ResumeThread(");
+  assert.ok(
+    createProcess >= 0 &&
+      assignProcess > createProcess &&
+      resumeThread > assignProcess,
+    "the task host must assign the suspended launcher to its job before resuming it",
+  );
 });
 
 test("Windows admin layers propagate explicit script exit codes", () => {
@@ -359,7 +397,7 @@ test("Windows admin diagnostics are cardinality-safe and report task connectivit
 
 test("public Windows bootstrap is pinned, local-only, transactional, and quiet", () => {
   const script = readFileSync("windows/bootstrap.ps1", "utf8");
-  assert.match(script, /\[string\]\$Ref = "v1\.2\.4"/);
+  assert.match(script, /\[string\]\$Ref = "v1\.2\.5"/);
   assert.match(script, /"AUTO_TUNNEL=0"/);
   assert.match(script, /"CONTROL_PLANE_URL="/);
   assert.match(script, /-NodeOnly/);
@@ -389,6 +427,8 @@ test("Windows launcher cleans exact child processes across hard Node crashes", (
     installer.match(/cleanup-orphans\.ps1/g)?.length === 3,
     "the release check plus pre-start and post-exit cleanup must remain",
   );
+  assert.match(installer, /ping\.exe -n 11 127\.0\.0\.1/);
+  assert.doesNotMatch(installer, /timeout\.exe/);
   assert.match(cleanup, /cloudflared\.exe/);
   assert.match(cleanup, /capture-worker\.ps1/);
   assert.match(cleanup, /CreationDate/);

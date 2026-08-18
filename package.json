@@ -1,6 +1,6 @@
 {
   "name": "prostar-agent",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "private": true,
   "description": "Prostar view-only macOS and Windows screen agent",
   "type": "module",
